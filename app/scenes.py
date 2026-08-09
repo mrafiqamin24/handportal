@@ -12,6 +12,7 @@ import cv2
 
 from app import config
 from app.draw import draw_heart, draw_note, draw_text, hsv_color
+from app.effects import apply_full_frame
 
 LABELS = {
     "PEACE": "FOTO KITA BLURRR",
@@ -64,7 +65,6 @@ class GestureScenes:
             k = 45
             frame[:] = cv2.GaussianBlur(frame, (k, k), 0)
         else:
-            from app.effects import apply_full_frame
             frame[:] = apply_full_frame(frame, effect_fn, prev_effect_fn, blend)
         draw_text(frame, LABELS["PEACE"], (cx, cy), 1.8 * pulse,
                   (255, 255, 255), 3)

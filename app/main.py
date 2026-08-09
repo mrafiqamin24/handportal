@@ -13,6 +13,7 @@ from mediapipe.tasks.python import vision
 from app import config
 from app.audio import AudioPlayer
 from app.draw import draw_hand_skeleton, hsv_color
+from app.effects import EFFECT_NAMES, EFFECTS
 from app.gestures import (GestureDebouncer, HandSmoother, PinchTapDetector,
                           classify_hand, detect_kicaw, detect_two_hand_heart,
                           hand_points, pinch_distance)
@@ -47,6 +48,24 @@ def main():
     debouncer = GestureDebouncer()
     pinch = PinchTapDetector()
     face_detector = make_face_detector(vision.RunningMode.VIDEO)
+
+    effect_idx = 0
+    prev_effect_idx = None     # filter yang sedang di-crossfade keluar
+    crossfade_start = 0.0
+    label_from = None          # nama filter yang sedang slide keluar
+    label_start = 0.0
+
+    def switch_effect(new_idx, now):
+        """Pindah filter dengan crossfade + animasi label."""
+        nonlocal effect_idx, prev_effect_idx, crossfade_start
+        nonlocal label_from, label_start
+        if new_idx == effect_idx:
+            return
+        prev_effect_idx = effect_idx
+        crossfade_start = now
+        label_from = EFFECT_NAMES[effect_idx]
+        label_start = now
+        effect_idx = new_idx
 
     prev_active = None
     start = time.time()
@@ -85,6 +104,15 @@ def main():
 
             # Pinch: TAP mengganti efek, HOLD memunculkan gestur 👌 OK.
             ev = pinch.update([pinch_distance(p) for p in hands_pts], t_now)
+            if ev.tap:
+                switch_effect((effect_idx + 1) % len(EFFECTS), t_now)
+
+            if prev_effect_idx is not None:
+                blend = min(1.0, (t_now - crossfade_start) / config.CROSSFADE_S)
+                if blend >= 1.0:
+                    prev_effect_idx = None
+            else:
+                blend = 1.0
 
             # Tentukan gestur frame ini (pose dua tangan diprioritaskan).
             current = None
@@ -111,7 +139,12 @@ def main():
             for pts in hands_pts:
                 draw_hand_skeleton(frame, pts, hsv_color(t_now * 0.25))
             if active:
-                scenes.render(frame, active, t_now)
+                scenes.render(
+                    frame, active, t_now,
+                    effect_fn=EFFECTS[effect_idx],
+                    prev_effect_fn=(EFFECTS[prev_effect_idx]
+                                    if prev_effect_idx is not None else None),
+                    blend=blend)
 
             # Suara: mulai saat gestur masuk, berhenti saat dilepas/ganti.
             if active != prev_active:
@@ -124,8 +157,22 @@ def main():
             prev_active = active
 
             cv2.imshow(WINDOW, frame)
-            if (cv2.waitKey(1) & 0xFF) in (ord("q"), 27):  # q / ESC
+            key = cv2.waitKey(1) & 0xFF
+            if key in (ord("q"), 27):  # q / ESC
                 break
+            elif ord("1") <= key <= ord("9"):
+                n = key - ord("1")
+                if n < len(EFFECTS):
+                    switch_effect(n, t_now)
+                    print(f"Efek: {EFFECT_NAMES[effect_idx]}")
+            elif key == ord("m"):
+                print(f"Audio: {'BISU' if audio.toggle_mute() else 'NYALA'}")
+            elif key in (ord("+"), ord("=")):
+                pinch.adjust(config.PINCH_STEP)
+                print(f"Ambang pinch: {pinch.enter:.3f}")
+            elif key == ord("-"):
+                pinch.adjust(-config.PINCH_STEP)
+                print(f"Ambang pinch: {pinch.enter:.3f}")
 
     cap.release()
     cv2.destroyAllWindows()
