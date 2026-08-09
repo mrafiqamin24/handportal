@@ -1,0 +1,15 @@
+# Model MediaPipe — diunduh otomatis saat pertama jalan
+models/
+
+# WAV hasil konversi dari mp3 (regenerasi dengan ffmpeg, lihat README)
+assets/Sond/*.wav
+
+# Screenshot
+shots/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+venv/
+.venv/

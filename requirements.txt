@@ -1,0 +1,6 @@
+# Aplikasi memakai MediaPipe Tasks API (HandLandmarker), butuh file model
+# models/hand_landmarker.task (lihat README untuk cara download).
+opencv-python>=4.8.0
+mediapipe>=0.10.11
+numpy>=1.26.0
+pygame>=2.5.0
