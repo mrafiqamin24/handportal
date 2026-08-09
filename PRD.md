@@ -8,3 +8,14 @@ ini adalah untuk main-main saja namanya foto-kita-blurrr jadi project ini akan m
 👌 = Tulisan + Animasi Oke
 ada juga foto saya sebagai contoh gestur di asset/gestur
 jika ada gestur seperti kicaw.jpg maka akan memutar sond kicaw mania.mp3
+
+---
+
+## Perkembangan
+
+PRD di atas adalah ide awal. Project ini kemudian digabungkan dengan
+[milan-kb/fancy-fingers](https://github.com/milan-kb/fancy-fingers) —
+menambah sembilan filter gambar, Mode Portal, dan HUD.
+
+Desain penggabungannya:
+`docs/superpowers/specs/2026-08-09-foto-kita-blurrr-handportal-merge-design.md`
