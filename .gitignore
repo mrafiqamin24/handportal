@@ -13,3 +13,6 @@ __pycache__/
 .pytest_cache/
 venv/
 .venv/
+
+# Sumber referensi (fancy-fingers) untuk keperluan implementasi
+.reference/
