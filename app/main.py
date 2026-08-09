@@ -13,8 +13,9 @@ from mediapipe.tasks.python import vision
 from app import config
 from app.audio import AudioPlayer
 from app.draw import draw_hand_skeleton, hsv_color
-from app.gestures import (GestureDebouncer, HandSmoother, classify_hand,
-                          detect_kicaw, detect_two_hand_heart, hand_points)
+from app.gestures import (GestureDebouncer, HandSmoother, PinchTapDetector,
+                          classify_hand, detect_kicaw, detect_two_hand_heart,
+                          hand_points, pinch_distance)
 from app.models import make_face_detector, make_landmarker, mouth_from_faces
 from app.scenes import GestureScenes
 
@@ -44,6 +45,7 @@ def main():
     scenes = GestureScenes()
     smoother = HandSmoother()
     debouncer = GestureDebouncer()
+    pinch = PinchTapDetector()
     face_detector = make_face_detector(vision.RunningMode.VIDEO)
 
     prev_active = None
@@ -81,12 +83,17 @@ def main():
             hands_pts = smoother.update(
                 [hand_points(lm, w, h) for lm in result.hand_landmarks])
 
+            # Pinch: TAP mengganti efek, HOLD memunculkan gestur 👌 OK.
+            ev = pinch.update([pinch_distance(p) for p in hands_pts], t_now)
+
             # Tentukan gestur frame ini (pose dua tangan diprioritaskan).
             current = None
             if detect_two_hand_heart(hands_pts, w):
                 current = "HEART"
             elif detect_kicaw(hands_pts, w, h, mouth):
                 current = "KICAW"
+            elif ev.holding:
+                current = "OK"
             else:
                 for pts in hands_pts:
                     g = classify_hand(pts)
@@ -94,6 +101,12 @@ def main():
                         current = g
                         break
             active = debouncer.update(current)
+
+            # 👌 OK sudah dijaga ambang 0,35 dtk; menumpuk debounce di atasnya
+            # membuatnya terasa lamban (~0,55 dtk), jadi OK dilewatkan langsung.
+            if current == "OK":
+                active = "OK"
+                debouncer.force("OK")
 
             for pts in hands_pts:
                 draw_hand_skeleton(frame, pts, hsv_color(t_now * 0.25))

@@ -1,5 +1,7 @@
 """Test helper landmark murni: tanpa kamera, tanpa MediaPipe."""
 
+import pytest
+
 from app import gestures as g
 from tests.conftest import make_hand
 
@@ -52,9 +54,19 @@ def test_classify_ily():
     assert g.classify_hand(make_hand(extended=("thumb", "index", "pinky"))) == "ILY"
 
 
-def test_classify_ok_needs_thumb_and_index_touching():
+def test_classify_no_longer_returns_ok_from_finger_shape():
+    """👌 OK sekarang dipicu pinch-ditahan (lihat tests/test_pinch.py),
+    bukan bentuk jari. classify_hand tidak boleh lagi mengklaimnya."""
     pts = make_hand(extended=("middle", "ring", "pinky"), thumb_index_gap=8)
-    assert g.classify_hand(pts) == "OK"
+    assert g.classify_hand(pts) != "OK"
+
+
+def test_pinch_distance_is_normalized_by_palm_size():
+    near = make_hand(extended=("middle", "ring", "pinky"), scale=60.0,
+                     thumb_index_gap=6)
+    far = make_hand(extended=("middle", "ring", "pinky"), scale=120.0,
+                    thumb_index_gap=12)
+    assert g.pinch_distance(near) == pytest.approx(g.pinch_distance(far), abs=0.02)
 
 
 def test_classify_returns_none_for_fist():

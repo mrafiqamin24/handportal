@@ -5,6 +5,7 @@ pernah membaca jam sendiri. Semua fungsi yang bergantung waktu menerima `now`
 sebagai argumen, sehingga seluruh isinya bisa di-test tanpa kamera.
 """
 
+import collections
 import math
 
 from app import config
@@ -72,15 +73,13 @@ def classify_hand(pts):
     """
     Klasifikasi gestur satu tangan -> nama gestur atau None.
     Aturan diperketat supaya tidak gampang salah deteksi (false positive).
+
+    👌 OK tidak ada di sini: gestur itu dipicu pinch yang ditahan, ditangani
+    `PinchTapDetector`. Bentuk jari tidak lagi menentukannya.
     """
     thumb, index, middle, ring, pinky = fingers_extended(pts)
     scale = palm_scale(pts)
     d_thumb_index = dist(pts[THUMB_TIP], pts[INDEX_TIP])
-
-    # 👌 OK: ujung jempol & telunjuk menyatu rapat (lingkaran kecil),
-    # SEMUA tiga jari lain (tengah, manis, kelingking) terbuka jelas.
-    if d_thumb_index < 0.42 * scale and middle and ring and pinky:
-        return "OK"
 
     # 🤟 ILY: jempol + telunjuk + kelingking terbuka; tengah & manis tertutup.
     # Jempol harus benar-benar melebar (jauh dari telunjuk).
@@ -96,6 +95,67 @@ def classify_hand(pts):
             return "PEACE"
 
     return None
+
+
+PinchEvent = collections.namedtuple("PinchEvent", "tap hold_started holding")
+
+
+def pinch_distance(pts):
+    """Jarak ujung jempol <-> ujung telunjuk, dinormalkan ke ukuran telapak.
+
+    Dinormalkan supaya ambangnya tetap benar saat tangan mendekat atau menjauh
+    dari kamera.
+    """
+    return dist(pts[THUMB_TIP], pts[INDEX_TIP]) / palm_scale(pts)
+
+
+class PinchTapDetector:
+    """Satu mesin-status untuk kedua tangan sekaligus.
+
+        sentuh lalu lepas SEBELUM hold_s  -> TAP  (ganti efek)
+        sentuh dan bertahan DI hold_s     -> HOLD (gestur OK)
+
+    Masing-masing memicu tepat sekali per pinch. Dua ambang jarak berbeda
+    (masuk lebih ketat daripada keluar) meredam jitter landmark di sekitar
+    ambang. Kedua tangan berbagi satu status, jadi pinch bersamaan tetap
+    dihitung satu kali.
+    """
+
+    def __init__(self, hold_s=config.PINCH_HOLD_S, enter=config.PINCH_ENTER,
+                 exit=config.PINCH_EXIT):
+        self.hold_s = hold_s
+        self.enter = enter
+        self.exit = exit
+        self._pinching = False
+        self._start = 0.0
+        self._held = False
+
+    def adjust(self, delta):
+        """Geser sensitivitas; selisih histeresis dipertahankan."""
+        gap = self.exit - self.enter
+        self.enter = max(config.PINCH_MIN,
+                         min(config.PINCH_MAX, self.enter + delta))
+        self.exit = self.enter + gap
+
+    def update(self, dists, now):
+        """`dists` = jarak pinch ternormalisasi tiap tangan; boleh kosong."""
+        d = min(dists) if dists else float("inf")
+        tap = False
+        hold_started = False
+        if self._pinching:
+            if d > self.exit:                       # dilepas
+                if (now - self._start) < self.hold_s:
+                    tap = True
+                self._pinching = False
+                self._held = False
+            elif not self._held and (now - self._start) >= self.hold_s:
+                self._held = True                   # jadi HOLD
+                hold_started = True
+        elif d < self.enter:
+            self._pinching = True
+            self._start = now
+            self._held = False
+        return PinchEvent(tap, hold_started, self._held)
 
 
 def detect_two_hand_heart(hands_pts, w):
@@ -207,3 +267,13 @@ class GestureDebouncer:
         if self.count >= self.hold_frames:
             self.active = self.candidate  # boleh None: gestur dilepas
         return self.active
+
+    def force(self, gesture):
+        """Setel gestur aktif langsung, melewati hitungan stabil.
+
+        Dipakai gestur yang punya penjaga waktunya sendiri (👌 OK), supaya
+        tidak terkena dua penundaan berturut-turut.
+        """
+        self.candidate = gesture
+        self.count = self.hold_frames
+        self.active = gesture
