@@ -7,6 +7,8 @@ sebagai argumen, sehingga seluruh isinya bisa di-test tanpa kamera.
 
 import math
 
+from app import config
+
 # Landmark index
 WRIST = 0
 THUMB_TIP, THUMB_IP, THUMB_MCP = 4, 3, 2
@@ -64,3 +66,144 @@ def fingers_extended(pts):
     ):
         extended.append(dist(pts[tip], wrist) > dist(pts[pip], wrist) * 1.05)
     return extended
+
+
+def classify_hand(pts):
+    """
+    Klasifikasi gestur satu tangan -> nama gestur atau None.
+    Aturan diperketat supaya tidak gampang salah deteksi (false positive).
+    """
+    thumb, index, middle, ring, pinky = fingers_extended(pts)
+    scale = palm_scale(pts)
+    d_thumb_index = dist(pts[THUMB_TIP], pts[INDEX_TIP])
+
+    # 👌 OK: ujung jempol & telunjuk menyatu rapat (lingkaran kecil),
+    # SEMUA tiga jari lain (tengah, manis, kelingking) terbuka jelas.
+    if d_thumb_index < 0.42 * scale and middle and ring and pinky:
+        return "OK"
+
+    # 🤟 ILY: jempol + telunjuk + kelingking terbuka; tengah & manis tertutup.
+    # Jempol harus benar-benar melebar (jauh dari telunjuk).
+    if (thumb and index and pinky and not middle and not ring
+            and d_thumb_index > 0.6 * scale):
+        return "ILY"
+
+    # ✌️ Peace: telunjuk & tengah terbuka membentuk huruf V yang jelas;
+    # manis & kelingking tertutup. Jempol tidak melebar (bukan ILY).
+    if index and middle and not ring and not pinky:
+        v_gap = dist(pts[INDEX_TIP], pts[MIDDLE_TIP])
+        if v_gap > 0.35 * scale:
+            return "PEACE"
+
+    return None
+
+
+def detect_two_hand_heart(hands_pts, w):
+    """🫶 Heart: dua tangan, ujung telunjuk hampir bersentuhan & ujung jempol
+    berdekatan (membentuk hati). Diperketat agar dua tangan peace tidak ikut."""
+    if len(hands_pts) != 2:
+        return False
+    a, b = hands_pts
+    index_close = dist(a[INDEX_TIP], b[INDEX_TIP]) < 0.12 * w
+    thumb_close = dist(a[THUMB_TIP], b[THUMB_TIP]) < 0.18 * w
+    # ujung telunjuk (atas hati) lebih tinggi dari ujung jempol (bawah hati)
+    index_top = (a[INDEX_TIP][1] + b[INDEX_TIP][1]) < (a[THUMB_TIP][1] + b[THUMB_TIP][1])
+    return index_close and thumb_close and index_top
+
+
+def detect_kicaw(hands_pts, w, h, mouth=None):
+    """🐦 Kicaw: satu tangan menutup mulut, tangan satunya menjulur ke depan
+    dengan jari-jari lurus terbuka.
+
+    Jika `mouth` (mx, my, r) tersedia dari deteksi wajah, "tutup mulut" dicek
+    akurat lewat jarak tangan ke titik mulut. Tanpa wajah, dipakai perkiraan
+    posisi tangan di area atas-tengah frame.
+    """
+    if len(hands_pts) != 2:
+        return False
+    # uji kedua kemungkinan peran (tangan A=mulut/B=depan, lalu sebaliknya)
+    for mhand, fwd in (hands_pts, hands_pts[::-1]):
+        mcx = sum(p[0] for p in mhand) / len(mhand)
+        mcy = sum(p[1] for p in mhand) / len(mhand)
+
+        _, idx, mid, ring, pinky = fingers_extended(fwd)
+        open_hand = (idx + mid + ring + pinky) >= 3  # jari lurus terbuka
+
+        fcx = sum(p[0] for p in fwd) / len(fwd)
+        fcy = sum(p[1] for p in fwd) / len(fwd)
+
+        if mouth is not None:
+            mx, my, r = mouth
+            near_mouth = dist((mcx, mcy), (mx, my)) < r
+            fwd_clear = dist((fcx, fcy), (mx, my)) > r  # tangan depan menjauh
+            roles_ok = near_mouth and fwd_clear
+        else:
+            near_face = mcy < 0.5 * h and 0.20 * w < mcx < 0.80 * w
+            roles_ok = near_face and fcy > mcy  # depan tak lebih tinggi dari mulut
+
+        if roles_ok and open_hand:
+            return True
+    return False
+
+
+class HandSmoother:
+    """Haluskan koordinat landmark antar-frame (exponential moving average).
+
+    Tangan dicocokkan ke frame sebelumnya berdasarkan posisi pergelangan
+    terdekat, jadi smoothing tetap benar walau urutan tangan berubah.
+    alpha besar = lebih responsif, alpha kecil = lebih halus.
+    """
+
+    def __init__(self, alpha=config.SMOOTH_ALPHA,
+                 match_dist=config.SMOOTH_MATCH_DIST):
+        self.alpha = alpha
+        self.match_dist = match_dist
+        self.prev = []  # list of list[(x,y) float]
+
+    def update(self, hands):
+        out = []
+        used = [False] * len(self.prev)
+        for pts in hands:
+            wrist = pts[WRIST]
+            best_d, bi = None, -1
+            for i, pp in enumerate(self.prev):
+                if used[i]:
+                    continue
+                d = dist(wrist, pp[WRIST])
+                if best_d is None or d < best_d:
+                    best_d, bi = d, i
+            if bi >= 0 and best_d < self.match_dist:
+                used[bi] = True
+                a = self.alpha
+                sm = [(a * nx + (1 - a) * ox, a * ny + (1 - a) * oy)
+                      for (nx, ny), (ox, oy) in zip(pts, self.prev[bi])]
+            else:
+                sm = [(float(x), float(y)) for x, y in pts]
+            out.append(sm)
+        self.prev = out
+        return [[(int(round(x)), int(round(y))) for x, y in pts] for pts in out]
+
+
+class GestureDebouncer:
+    """Gestur baru dianggap aktif hanya setelah bertahan stabil N frame.
+
+    Bikin deteksi anti-kedip dan mencegah suara ter-spam. `update` menerima
+    gestur mentah frame ini (boleh `None`) dan mengembalikan gestur yang
+    benar-benar aktif — yang tetap bertahan sampai kandidat baru cukup stabil.
+    """
+
+    def __init__(self, hold_frames=config.HOLD_FRAMES):
+        self.hold_frames = hold_frames
+        self.candidate = None
+        self.count = 0
+        self.active = None
+
+    def update(self, current):
+        if current == self.candidate:
+            self.count += 1
+        else:
+            self.candidate = current
+            self.count = 1
+        if self.count >= self.hold_frames:
+            self.active = self.candidate  # boleh None: gestur dilepas
+        return self.active
