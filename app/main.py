@@ -4,6 +4,8 @@ Satu-satunya modul yang menyentuh kamera, jam, dan keyboard. Semua logika yang
 bisa di-test tanpa perangkat keras ada di modul lain.
 """
 
+import math
+import os
 import time
 
 import cv2
@@ -12,11 +14,13 @@ from mediapipe.tasks.python import vision
 
 from app import config
 from app.audio import AudioPlayer
-from app.draw import draw_hand_skeleton, hsv_color
+from app.draw import (draw_hand_skeleton, hsv_color, lerp_color,
+                      make_vignette_layer)
 from app.effects import EFFECT_NAMES, EFFECTS
 from app.gestures import (GestureDebouncer, HandSmoother, PinchTapDetector,
                           classify_hand, detect_kicaw, detect_two_hand_heart,
                           hand_points, pinch_distance)
+from app.hud import Hud
 from app.models import make_face_detector, make_landmarker, mouth_from_faces
 from app.scenes import GestureScenes
 
@@ -41,6 +45,9 @@ def open_camera():
 def main():
     cap = open_camera()
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
+    if config.FULLSCREEN:
+        cv2.setWindowProperty(WINDOW, cv2.WND_PROP_FULLSCREEN,
+                              cv2.WINDOW_FULLSCREEN)
 
     audio = AudioPlayer({"blur": config.SOUND_BLUR, "kicaw": config.SOUND_KICAW})
     scenes = GestureScenes()
@@ -67,8 +74,21 @@ def main():
         label_start = now
         effect_idx = new_idx
 
+    hud = Hud()
+    fps = 30.0
+    fps_accum = 0.0
+    fps_frames = 0
+    vignette_enabled = config.VIGNETTE
+    vignette_layer = None
+    fullscreen = config.FULLSCREEN
+    shot_count = 0
+    show_hint = True
+    hint_start = 0.0  # diisi `start` di bawah; ditekan ulang oleh tombol `h`
+
     prev_active = None
     start = time.time()
+    hint_start = start
+    t_prev = start
     last_ts = -1  # timestamp ms terakhir (harus selalu naik)
 
     with make_landmarker(vision.RunningMode.VIDEO) as landmarker:
@@ -79,6 +99,8 @@ def main():
             frame = cv2.flip(frame, 1)  # mode selfie / cermin
             h, w = frame.shape[:2]
             t_now = time.time()
+            dt = max(1e-6, t_now - t_prev)
+            t_prev = t_now
 
             # Deteksi di citra diperkecil (landmark ternormalisasi -> tetap
             # presisi saat dipetakan balik ke resolusi penuh).
@@ -156,6 +178,33 @@ def main():
                     audio.play(new_key)
             prev_active = active
 
+            if vignette_enabled:
+                if (vignette_layer is None
+                        or vignette_layer.shape[:2] != (h, w)):
+                    vignette_layer = make_vignette_layer(w, h)
+                frame = cv2.multiply(frame, vignette_layer, scale=1.0 / 255.0)
+
+            fps_accum += dt
+            fps_frames += 1
+            if fps_accum >= 0.25:
+                fps = fps_frames / fps_accum
+                fps_frames = 0
+                fps_accum = 0.0
+
+            # Denyut warna lambat yang sama dipakai portal, jadi HUD dan portal
+            # terasa satu sistem.
+            accent = lerp_color(config.ACCENT, config.ACCENT_VIOLET,
+                                0.5 + 0.5 * math.sin((t_now - start) * 1.25))
+
+            label_p = 1.0
+            if label_from is not None:
+                label_p = min(1.0, (t_now - label_start) / config.LABEL_ANIM_S)
+                if label_p >= 1.0:
+                    label_from = None
+            hud.draw(frame, "GESTUR", effect_idx, EFFECT_NAMES[effect_idx],
+                     label_from, label_p, fps, accent,
+                     elapsed=(t_now - hint_start) if show_hint else 1e9)
+
             cv2.imshow(WINDOW, frame)
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27):  # q / ESC
@@ -173,6 +222,26 @@ def main():
             elif key == ord("-"):
                 pinch.adjust(-config.PINCH_STEP)
                 print(f"Ambang pinch: {pinch.enter:.3f}")
+            elif key == ord("s"):
+                os.makedirs(config.SHOTS_DIR, exist_ok=True)
+                shot_count += 1
+                path = os.path.join(config.SHOTS_DIR,
+                                    f"foto-kita-blurrr-{shot_count:03d}.png")
+                cv2.imwrite(path, frame)
+                print(f"Tersimpan: {path}")
+            elif key == ord("v"):
+                vignette_enabled = not vignette_enabled
+                print(f"Vignette: {'NYALA' if vignette_enabled else 'MATI'}")
+            elif key == ord("h"):
+                # timer di-reset supaya hint benar-benar muncul lagi
+                show_hint = not show_hint
+                hint_start = t_now
+            elif key == ord("f"):
+                fullscreen = not fullscreen
+                cv2.setWindowProperty(
+                    WINDOW, cv2.WND_PROP_FULLSCREEN,
+                    cv2.WINDOW_FULLSCREEN if fullscreen else cv2.WINDOW_NORMAL)
+                print(f"Layar penuh: {'NYALA' if fullscreen else 'MATI'}")
 
     cap.release()
     cv2.destroyAllWindows()
