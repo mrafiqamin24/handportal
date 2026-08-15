@@ -328,17 +328,38 @@ class DoublePinchDetector:
         return DoublePinchEvent(triggered, both_closed)
 
 
-def detect_two_hand_heart(hands_pts, w):
-    """🫶 Heart: dua tangan, ujung telunjuk hampir bersentuhan & ujung jempol
-    berdekatan (membentuk hati). Diperketat agar dua tangan peace tidak ikut."""
+def detect_two_hand_heart(hands_pts, w=None):
+    """🫶 Heart: dua tangan, ujung telunjuk bertemu & ujung jempol berdekatan.
+
+    Ambang di sini diukur dari foto hati asli di `assets/gestur/Love.jpg`, bukan
+    dikira-kira. Pada pose itu kedua tangan dipegang mendatar, jadi jempol hanya
+    sedikit di bawah telunjuk (0,15 telapak) dan bentang jempol-telunjuk tiap
+    tangan cuma sekitar 0,4 telapak. Aturan lama menuntut 0,55 dan 0,90, dan
+    itulah yang membuat hati asli tidak pernah terdeteksi.
+
+    Pemisah sesungguhnya adalah `index_gap`: 0,06 telapak pada hati versus 2,34
+    pada dua tangan ✌️ Peace — beda 40 kali lipat. Syarat lain tinggal menolak
+    pose yang runtuh (empat ujung menggumpal) dan tangan terbalik.
+    """
     if len(hands_pts) != 2:
         return False
     a, b = hands_pts
-    index_close = dist(a[INDEX_TIP], b[INDEX_TIP]) < 0.12 * w
-    thumb_close = dist(a[THUMB_TIP], b[THUMB_TIP]) < 0.18 * w
-    # ujung telunjuk (atas hati) lebih tinggi dari ujung jempol (bawah hati)
-    index_top = (a[INDEX_TIP][1] + b[INDEX_TIP][1]) < (a[THUMB_TIP][1] + b[THUMB_TIP][1])
-    return index_close and thumb_close and index_top
+    scale = (palm_scale(a) + palm_scale(b)) * 0.5
+    index_gap = dist(a[INDEX_TIP], b[INDEX_TIP])
+    thumb_gap = dist(a[THUMB_TIP], b[THUMB_TIP])
+    index_mid_y = (a[INDEX_TIP][1] + b[INDEX_TIP][1]) * 0.5
+    thumb_mid_y = (a[THUMB_TIP][1] + b[THUMB_TIP][1]) * 0.5
+
+    # Kedua pasangan ujung jari bertemu membentuk dua sudut hati.
+    tips_meet = index_gap < 0.60 * scale and thumb_gap < 1.30 * scale
+    # Tiap tangan tetap membuka: menolak dua tangan yang sekadar mengepal atau
+    # sama-sama mencubit sehingga keempat ujungnya menggumpal jadi satu titik.
+    hands_open = (dist(a[INDEX_TIP], a[THUMB_TIP]) > 0.30 * scale
+                  and dist(b[INDEX_TIP], b[THUMB_TIP]) > 0.30 * scale)
+    # Telunjuk membentuk lekuk atas hati, jadi tidak boleh jatuh di bawah jempol.
+    index_on_top = (thumb_mid_y - index_mid_y) > -0.35 * scale
+    wrists_apart = dist(a[WRIST], b[WRIST]) > 1.50 * scale
+    return tips_meet and hands_open and index_on_top and wrists_apart
 
 
 def detect_kicaw(hands_pts, w, h, mouth=None):

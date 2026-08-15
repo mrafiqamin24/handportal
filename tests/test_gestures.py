@@ -135,24 +135,60 @@ def test_heart_needs_two_hands():
 
 
 def test_heart_detected_when_tips_meet():
-    left = make_hand(extended=("thumb", "index"), origin=(600, 400))
-    right = make_hand(extended=("thumb", "index"), origin=(680, 400))
+    left = make_hand(extended=("thumb", "index"), origin=(600, 420))
+    right = make_hand(extended=("thumb", "index"), origin=(700, 420))
     # paksa ujung telunjuk bertemu di atas, ujung jempol berdekatan di bawah
-    left[g.INDEX_TIP] = (630, 300)
-    right[g.INDEX_TIP] = (650, 300)
-    left[g.THUMB_TIP] = (600, 400)
-    right[g.THUMB_TIP] = (680, 400)
+    left[g.INDEX_TIP] = (645, 330)
+    right[g.INDEX_TIP] = (655, 330)
+    left[g.THUMB_TIP] = (645, 390)
+    right[g.THUMB_TIP] = (655, 390)
     assert g.detect_two_hand_heart([left, right], 1280) is True
 
 
+def test_heart_rejects_two_index_tips_when_thumbs_do_not_meet():
+    left = make_hand(extended=("thumb", "index"), origin=(600, 420))
+    right = make_hand(extended=("thumb", "index"), origin=(700, 420))
+    left[g.INDEX_TIP] = (645, 330)
+    right[g.INDEX_TIP] = (655, 330)
+    assert g.detect_two_hand_heart([left, right], 1280) is False
+
+
+def test_heart_rejects_four_tips_clustered_without_heart_shape():
+    left = make_hand(origin=(600, 420))
+    right = make_hand(origin=(700, 420))
+    left[g.INDEX_TIP] = (645, 350)
+    right[g.INDEX_TIP] = (655, 350)
+    left[g.THUMB_TIP] = (645, 355)
+    right[g.THUMB_TIP] = (655, 355)
+    assert g.detect_two_hand_heart([left, right], 1280) is False
+
+
 def test_heart_rejected_when_index_tips_below_thumbs():
+    """Tangan terbalik: kedua pasangan ujung jari tetap bertemu, tapi telunjuk
+    jatuh di bawah jempol — bukan lekuk atas hati. Jarak antar-ujung sengaja
+    dibuat lolos supaya yang benar-benar diuji adalah penjaga orientasinya."""
     left = make_hand(origin=(600, 400))
     right = make_hand(origin=(680, 400))
-    left[g.INDEX_TIP] = (630, 500)
+    left[g.INDEX_TIP] = (640, 500)
     right[g.INDEX_TIP] = (650, 500)
-    left[g.THUMB_TIP] = (600, 300)
-    right[g.THUMB_TIP] = (680, 300)
+    left[g.THUMB_TIP] = (630, 300)
+    right[g.THUMB_TIP] = (650, 300)
     assert g.detect_two_hand_heart([left, right], 1280) is False
+
+
+def test_heart_accepts_the_flat_pose_from_the_reference_photo():
+    """Pada hati dua-tangan yang dipegang mendatar, jempol cuma sedikit di
+    bawah telunjuk dan bentang jempol-telunjuk tiap tangan pendek. Angka di
+    sini meniru `assets/gestur/Love.jpg`; aturan lama menolaknya."""
+    left = make_hand(origin=(500, 560), scale=100.0)
+    right = make_hand(origin=(780, 560), scale=100.0)
+    scale = (g.palm_scale(left) + g.palm_scale(right)) * 0.5
+    left[g.INDEX_TIP] = (639, 470)
+    right[g.INDEX_TIP] = (641, 470)
+    # jempol hanya ~0,15 telapak di bawah telunjuk, terpisah ~0,84 telapak
+    left[g.THUMB_TIP] = (int(640 - 0.42 * scale), int(470 + 0.15 * scale))
+    right[g.THUMB_TIP] = (int(640 + 0.42 * scale), int(470 + 0.15 * scale))
+    assert g.detect_two_hand_heart([left, right], 1280) is True
 
 
 def test_kicaw_detected_for_either_hand_role():
@@ -279,3 +315,14 @@ def test_smoother_never_returns_more_than_two_tracks_on_label_flip():
     s.update([left, right], ["Left", "Right"])
     out = s.update([left, right], ["Right", "Left"])
     assert len(out) == 2
+
+
+def test_heart_threshold_scales_with_hand_size_not_frame_width():
+    left = make_hand(origin=(250, 300), scale=50.0)
+    right = make_hand(origin=(650, 300), scale=50.0)
+    left[g.INDEX_TIP] = (440, 200)
+    right[g.INDEX_TIP] = (460, 200)
+    left[g.THUMB_TIP] = (420, 260)
+    right[g.THUMB_TIP] = (480, 260)
+    # Pada kode lama, frame 4K membuat jarak ini lolos karena ambang memakai w.
+    assert g.detect_two_hand_heart([left, right], 3840) is False
