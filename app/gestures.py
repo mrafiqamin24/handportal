@@ -13,10 +13,10 @@ from app import config
 # Landmark index
 WRIST = 0
 THUMB_TIP, THUMB_IP, THUMB_MCP = 4, 3, 2
-INDEX_TIP, INDEX_PIP, INDEX_MCP = 8, 6, 5
-MIDDLE_TIP, MIDDLE_PIP, MIDDLE_MCP = 12, 10, 9
-RING_TIP, RING_PIP = 16, 14
-PINKY_TIP, PINKY_PIP, PINKY_MCP = 20, 18, 17
+INDEX_TIP, INDEX_DIP, INDEX_PIP, INDEX_MCP = 8, 7, 6, 5
+MIDDLE_TIP, MIDDLE_DIP, MIDDLE_PIP, MIDDLE_MCP = 12, 11, 10, 9
+RING_TIP, RING_DIP, RING_PIP, RING_MCP = 16, 15, 14, 13
+PINKY_TIP, PINKY_DIP, PINKY_PIP, PINKY_MCP = 20, 19, 18, 17
 
 TIP_IDS = [THUMB_TIP, INDEX_TIP, MIDDLE_TIP, RING_TIP, PINKY_TIP]
 
@@ -33,6 +33,17 @@ HAND_CONNECTIONS = [
 
 def dist(a, b):
     return math.hypot(a[0] - b[0], a[1] - b[1])
+
+
+def joint_angle(a, b, c):
+    """Sudut ABC dalam derajat, aman untuk landmark yang berimpit."""
+    bax, bay = a[0] - b[0], a[1] - b[1]
+    bcx, bcy = c[0] - b[0], c[1] - b[1]
+    denom = math.hypot(bax, bay) * math.hypot(bcx, bcy)
+    if denom < 1e-6:
+        return 0.0
+    cosine = max(-1.0, min(1.0, (bax * bcx + bay * bcy) / denom))
+    return math.degrees(math.acos(cosine))
 
 
 def hand_points(landmark_list, w, h):
@@ -55,18 +66,60 @@ def fingers_extended(pts):
     extended = []
 
     # Thumb: bandingkan jarak tip & ip terhadap pangkal jari kelingking.
+    # Rasio jalur sendi menolak jempol yang terlipat tetapi kebetulan menjauh.
     ref = pts[PINKY_MCP]
-    extended.append(dist(pts[THUMB_TIP], ref) > dist(pts[THUMB_IP], ref))
+    thumb_path = (dist(pts[THUMB_MCP], pts[THUMB_IP])
+                  + dist(pts[THUMB_IP], pts[THUMB_TIP]))
+    thumb_direct = dist(pts[THUMB_MCP], pts[THUMB_TIP])
+    extended.append(
+        dist(pts[THUMB_TIP], ref) > dist(pts[THUMB_IP], ref) * 1.03
+        and thumb_direct / max(thumb_path, 1e-3) > 0.72
+        and joint_angle(pts[THUMB_MCP], pts[THUMB_IP], pts[THUMB_TIP]) > 135
+    )
 
-    # Empat jari lain: tip lebih jauh dari wrist dibanding pip => terbuka.
-    for tip, pip in (
-        (INDEX_TIP, INDEX_PIP),
-        (MIDDLE_TIP, MIDDLE_PIP),
-        (RING_TIP, RING_PIP),
-        (PINKY_TIP, PINKY_PIP),
+    # Empat jari lain harus sekaligus menjauh dari wrist DAN cukup lurus.
+    # Syarat kelurusan berbasis rasio panjang chord/path, jadi tetap bekerja
+    # saat tangan diputar dan lebih sulit tertipu jari yang sedang menekuk.
+    for tip, dip, pip, mcp in (
+        (INDEX_TIP, INDEX_DIP, INDEX_PIP, INDEX_MCP),
+        (MIDDLE_TIP, MIDDLE_DIP, MIDDLE_PIP, MIDDLE_MCP),
+        (RING_TIP, RING_DIP, RING_PIP, RING_MCP),
+        (PINKY_TIP, PINKY_DIP, PINKY_PIP, PINKY_MCP),
     ):
-        extended.append(dist(pts[tip], wrist) > dist(pts[pip], wrist) * 1.05)
+        path = (dist(pts[mcp], pts[pip]) + dist(pts[pip], pts[dip])
+                + dist(pts[dip], pts[tip]))
+        straightness = dist(pts[mcp], pts[tip]) / max(path, 1e-3)
+        reaches_out = dist(pts[tip], wrist) > dist(pts[pip], wrist) * 1.05
+        pip_angle = joint_angle(pts[mcp], pts[pip], pts[dip])
+        dip_angle = joint_angle(pts[pip], pts[dip], pts[tip])
+        extended.append(reaches_out and straightness > 0.72
+                        and pip_angle > 145 and dip_angle > 145)
     return extended
+
+
+def fingers_folded(pts):
+    """Jari yang benar-benar menekuk, bukan sekadar gagal dianggap lurus.
+
+    Margin terpisah dari :func:`fingers_extended` membuat pose setengah jadi
+    berada di zona netral.  Ini penting agar noise satu sendi tidak langsung
+    mengubah pose ambigu menjadi PEACE atau ILY.
+    """
+    thumb_extended = fingers_extended(pts)[0]
+    folded = [not thumb_extended]
+    for tip, dip, pip, mcp in (
+        (INDEX_TIP, INDEX_DIP, INDEX_PIP, INDEX_MCP),
+        (MIDDLE_TIP, MIDDLE_DIP, MIDDLE_PIP, MIDDLE_MCP),
+        (RING_TIP, RING_DIP, RING_PIP, RING_MCP),
+        (PINKY_TIP, PINKY_DIP, PINKY_PIP, PINKY_MCP),
+    ):
+        path = (dist(pts[mcp], pts[pip]) + dist(pts[pip], pts[dip])
+                + dist(pts[dip], pts[tip]))
+        straightness = dist(pts[mcp], pts[tip]) / max(path, 1e-3)
+        pip_angle = joint_angle(pts[mcp], pts[pip], pts[dip])
+        dip_angle = joint_angle(pts[pip], pts[dip], pts[tip])
+        folded.append(straightness < 0.62
+                      and min(pip_angle, dip_angle) < 130)
+    return folded
 
 
 def classify_hand(pts):
@@ -78,20 +131,28 @@ def classify_hand(pts):
     `PinchTapDetector`. Bentuk jari tidak lagi menentukannya.
     """
     thumb, index, middle, ring, pinky = fingers_extended(pts)
+    _, index_folded, middle_folded, ring_folded, pinky_folded = (
+        fingers_folded(pts))
     scale = palm_scale(pts)
     d_thumb_index = dist(pts[THUMB_TIP], pts[INDEX_TIP])
 
     # 🤟 ILY: jempol + telunjuk + kelingking terbuka; tengah & manis tertutup.
     # Jempol harus benar-benar melebar (jauh dari telunjuk).
-    if (thumb and index and pinky and not middle and not ring
-            and d_thumb_index > 0.6 * scale):
+    if (thumb and index and pinky and middle_folded and ring_folded
+            and d_thumb_index > 0.75 * scale
+            and dist(pts[INDEX_TIP], pts[PINKY_TIP]) > 0.70 * scale):
         return "ILY"
 
     # ✌️ Peace: telunjuk & tengah terbuka membentuk huruf V yang jelas;
     # manis & kelingking tertutup. Jempol tidak melebar (bukan ILY).
-    if index and middle and not ring and not pinky:
-        v_gap = dist(pts[INDEX_TIP], pts[MIDDLE_TIP])
-        if v_gap > 0.35 * scale:
+    # Dua ukuran V dipakai sekaligus: lebar mutlak (relatif telapak) menolak
+    # dua jari yang rapat, dan rasio terhadap jarak pangkalnya menolak tangan
+    # yang sekadar jauh dari kamera.
+    if (not thumb and index and middle and ring_folded and pinky_folded
+            and not index_folded):
+        tip_span = dist(pts[INDEX_TIP], pts[MIDDLE_TIP])
+        mcp_span = max(dist(pts[INDEX_MCP], pts[MIDDLE_MCP]), 1e-3)
+        if tip_span > 0.42 * scale and tip_span > 1.35 * mcp_span:
             return "PEACE"
 
     return None
@@ -187,7 +248,7 @@ def detect_kicaw(hands_pts, w, h, mouth=None):
         mcy = sum(p[1] for p in mhand) / len(mhand)
 
         _, idx, mid, ring, pinky = fingers_extended(fwd)
-        open_hand = (idx + mid + ring + pinky) >= 3  # jari lurus terbuka
+        open_hand = idx and mid and ring and pinky
 
         fcx = sum(p[0] for p in fwd) / len(fwd)
         fcy = sum(p[1] for p in fwd) / len(fwd)
@@ -195,11 +256,13 @@ def detect_kicaw(hands_pts, w, h, mouth=None):
         if mouth is not None:
             mx, my, r = mouth
             near_mouth = dist((mcx, mcy), (mx, my)) < r
-            fwd_clear = dist((fcx, fcy), (mx, my)) > r  # tangan depan menjauh
+            fwd_clear = dist((fcx, fcy), (mx, my)) > 1.25 * r
             roles_ok = near_mouth and fwd_clear
         else:
             near_face = mcy < 0.5 * h and 0.20 * w < mcx < 0.80 * w
-            roles_ok = near_face and fcy > mcy  # depan tak lebih tinggi dari mulut
+            separated = dist((fcx, fcy), (mcx, mcy)) > 0.75 * (
+                palm_scale(mhand) + palm_scale(fwd))
+            roles_ok = near_face and fcy > mcy and separated
 
         if roles_ok and open_hand:
             return True

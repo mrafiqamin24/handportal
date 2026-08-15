@@ -10,6 +10,11 @@ def test_dist_is_euclidean():
     assert g.dist((0, 0), (3, 4)) == 5.0
 
 
+def test_joint_angle_recognizes_straight_and_bent_joints():
+    assert g.joint_angle((0, 0), (1, 0), (2, 0)) == pytest.approx(180)
+    assert g.joint_angle((0, 0), (1, 0), (1, 1)) == pytest.approx(90)
+
+
 def test_hand_points_scales_normalized_landmarks_to_pixels():
     class LM:
         def __init__(self, x, y):
@@ -50,8 +55,18 @@ def test_classify_peace():
     assert g.classify_hand(make_hand(extended=("index", "middle"))) == "PEACE"
 
 
+def test_peace_rejects_an_open_thumb():
+    pts = make_hand(extended=("thumb", "index", "middle"))
+    assert g.classify_hand(pts) is None
+
+
 def test_classify_ily():
     assert g.classify_hand(make_hand(extended=("thumb", "index", "pinky"))) == "ILY"
+
+
+def test_ily_rejects_middle_finger_that_is_not_folded():
+    pts = make_hand(extended=("thumb", "index", "middle", "pinky"))
+    assert g.classify_hand(pts) is None
 
 
 def test_classify_no_longer_returns_ok_from_finger_shape():
@@ -119,6 +134,14 @@ def test_kicaw_rejected_when_second_hand_is_closed():
     mouth_hand = make_hand(extended=(), origin=(640, 200), scale=60.0)
     fist = make_hand(extended=(), origin=(300, 500))
     assert g.detect_kicaw([mouth_hand, fist], 1280, 720, (640, 200, 120.0)) is False
+
+
+def test_kicaw_requires_all_four_forward_fingers_open():
+    mouth_hand = make_hand(extended=(), origin=(640, 200), scale=60.0)
+    three_fingers = make_hand(extended=("index", "middle", "ring"),
+                              origin=(300, 500))
+    assert g.detect_kicaw(
+        [mouth_hand, three_fingers], 1280, 720, (640, 200, 120.0)) is False
 
 
 def test_debouncer_requires_stable_frames():
