@@ -12,7 +12,7 @@ import cv2
 
 from app import config
 from app.draw import draw_heart, draw_note, draw_text, hsv_color
-from app.effects import apply_full_frame
+from app.effects import apply_full_frame, fx_blur
 
 LABELS = {
     "PEACE": "FOTO KITA BLURRR",
@@ -39,16 +39,21 @@ class GestureScenes:
         self.hearts = []    # [x, y, kecepatan, ukuran]
         self.confetti = []  # [x, y, vy, vx, warna, ukuran]
 
-    def render(self, frame, gesture, t, effect_fn=None,
-               prev_effect_fn=None, blend=1.0):
+    @staticmethod
+    def apply_background(frame, gesture):
+        """Kembalikan latar gestur; hanya Peace memakai blur kamera."""
+        if gesture == "PEACE":
+            return apply_full_frame(frame, fx_blur)
+        return frame
+
+    def render(self, frame, gesture, t):
         h, w = frame.shape[:2]
         cx, cy = w // 2, h // 2
         pulse = 1.0 + 0.12 * math.sin(t * 6.0)
         hue = (t * 0.25) % 1.0
 
         if gesture == "PEACE":
-            self._peace(frame, cx, cy, w, h, pulse, effect_fn,
-                        prev_effect_fn, blend)
+            self._peace(frame, cx, cy, w, h, pulse)
         elif gesture == "HEART":
             self._heart(frame, cx, cy, w, h, pulse)
         elif gesture == "ILY":
@@ -58,14 +63,8 @@ class GestureScenes:
         elif gesture == "KICAW":
             self._kicaw(frame, cx, cy, w, h, t, pulse, hue)
 
-    def _peace(self, frame, cx, cy, w, h, pulse, effect_fn,
-               prev_effect_fn, blend):
-        """Seluruh layar kena filter aktif, lalu judul di tengah."""
-        if effect_fn is None:
-            k = 45
-            frame[:] = cv2.GaussianBlur(frame, (k, k), 0)
-        else:
-            frame[:] = apply_full_frame(frame, effect_fn, prev_effect_fn, blend)
+    def _peace(self, frame, cx, cy, w, h, pulse):
+        """Judul Peace; blur latar diterapkan sebelum skeleton lewat main."""
         draw_text(frame, LABELS["PEACE"], (cx, cy), 1.8 * pulse,
                   (255, 255, 255), 3)
         if BLUR_THUMB is not None:
