@@ -27,13 +27,25 @@ FACE_MODEL_URL = (
 # ---------------------------------------------------------------- kamera
 CAM_INDEX = 0
 FRAME_W, FRAME_H = 1280, 720
-DETECT_WIDTH = 640         # deteksi tangan di frame diperkecil -> lebih responsif
+DETECT_WIDTH = 768         # detail fingertip lebih baik, masih lebih ringan dari 1280
 EFFECT_SCALE = 0.5         # filter layar-penuh dihitung di separuh resolusi
 
+# MediaPipe Tasks. Nilai sedikit di atas bawaan menahan false positive tanpa
+# membuat tangan yang sedang bergerak cepat terlalu mudah hilang.
+HAND_DETECTION_CONFIDENCE = 0.58
+HAND_PRESENCE_CONFIDENCE = 0.52
+HAND_TRACKING_CONFIDENCE = 0.52
+HANDEDNESS_MIN_CONFIDENCE = 0.65
+
 # ---------------------------------------------------------------- gestur
-HOLD_FRAMES = 6            # frame stabil sebelum sebuah gestur dianggap aktif
-SMOOTH_ALPHA = 0.6         # besar = responsif, kecil = halus
+HOLD_FRAMES = 5            # frame stabil sebelum sebuah gestur dianggap aktif
+SMOOTH_ALPHA = 0.6         # kompatibilitas untuk pemanggil yang memilih EMA tetap
+SMOOTH_ALPHA_MIN = 0.30    # tangan hampir diam: redam jitter lebih kuat
+SMOOTH_ALPHA_MAX = 0.78    # gerakan cepat: kurangi rasa tertinggal
+SMOOTH_MOTION_LOW = 0.03   # gerak wrist / ukuran telapak
+SMOOTH_MOTION_HIGH = 0.35
 SMOOTH_MATCH_DIST = 140.0  # jarak maksimum pencocokan tangan antar-frame
+HAND_MISSING_GRACE = 2     # tahan landmark 2 frame saat detector sesaat dropout
 
 # ---------------------------------------------------------------- pinch
 # Jarak ternormalisasi ujung jempol <-> ujung telunjuk. Dua ambang berbeda

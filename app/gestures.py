@@ -51,6 +51,25 @@ def hand_points(landmark_list, w, h):
     return [(int(lm.x * w), int(lm.y * h)) for lm in landmark_list]
 
 
+def handedness_labels(result):
+    """Ambil label Left/Right dari hasil MediaPipe, sejajar dengan landmarks.
+
+    Tasks API mengembalikan daftar kategori per tangan. Fungsi defensif ini
+    menjaga loop kamera tetap aman pada hasil kosong atau versi API yang
+    memakai atribut nama kategori berbeda.
+    """
+    labels = []
+    for categories in getattr(result, "handedness", None) or []:
+        category = categories[0] if categories else None
+        name = (getattr(category, "category_name", None)
+                or getattr(category, "display_name", None)) if category else None
+        score = getattr(category, "score", None) if category else None
+        labels.append(name if name and (score is None or score >=
+                                        config.HANDEDNESS_MIN_CONFIDENCE)
+                      else None)
+    return labels
+
+
 def palm_scale(pts):
     """Ukuran telapak (wrist -> middle MCP) sebagai skala referensi."""
     return max(dist(pts[WRIST], pts[MIDDLE_MCP]), 1e-3)
@@ -277,33 +296,93 @@ class HandSmoother:
     alpha besar = lebih responsif, alpha kecil = lebih halus.
     """
 
-    def __init__(self, alpha=config.SMOOTH_ALPHA,
-                 match_dist=config.SMOOTH_MATCH_DIST):
+    def __init__(self, alpha=None, match_dist=config.SMOOTH_MATCH_DIST,
+                 missing_grace=config.HAND_MISSING_GRACE):
         self.alpha = alpha
         self.match_dist = match_dist
+        self.missing_grace = missing_grace
         self.prev = []  # list of list[(x,y) float]
+        self.prev_labels = []
+        self.prev_missing = []
 
-    def update(self, hands):
+    def _alpha_for(self, pts, previous, landmark=WRIST):
+        if self.alpha is not None:
+            return self.alpha
+        # Setiap sendi bergerak dengan kecepatannya sendiri. Memakai wrist saja
+        # membuat ujung jari tertinggal ketika pengguna membentuk gestur tanpa
+        # menggeser telapak; landmark cepat kini mendapat alpha lebih besar.
+        motion = dist(pts[landmark], previous[landmark]) / palm_scale(pts)
+        span = max(config.SMOOTH_MOTION_HIGH - config.SMOOTH_MOTION_LOW, 1e-6)
+        p = max(0.0, min(1.0, (motion - config.SMOOTH_MOTION_LOW) / span))
+        return (config.SMOOTH_ALPHA_MIN
+                + (config.SMOOTH_ALPHA_MAX - config.SMOOTH_ALPHA_MIN) * p)
+
+    def reset(self):
+        """Lupakan semua trek, misalnya setelah sumber kamera berubah."""
+        self.prev = []
+        self.prev_labels = []
+        self.prev_missing = []
+
+    @property
+    def labels(self):
+        """Label handedness yang sejajar dengan hasil `update` terakhir."""
+        return list(self.prev_labels)
+
+    @property
+    def missing_counts(self):
+        """0 berarti landmark terlihat pada frame terbaru, >0 adalah bridge."""
+        return list(self.prev_missing)
+
+    def update(self, hands, labels=None):
+        labels = list(labels or [])
+        if len(labels) < len(hands):
+            labels.extend([None] * (len(hands) - len(labels)))
         out = []
+        out_labels = []
+        out_missing = []
         used = [False] * len(self.prev)
-        for pts in hands:
+        for pts, label in zip(hands, labels):
             wrist = pts[WRIST]
             best_d, bi = None, -1
             for i, pp in enumerate(self.prev):
                 if used[i]:
+                    continue
+                prev_label = self.prev_labels[i]
+                if label and prev_label and label != prev_label:
                     continue
                 d = dist(wrist, pp[WRIST])
                 if best_d is None or d < best_d:
                     best_d, bi = d, i
             if bi >= 0 and best_d < self.match_dist:
                 used[bi] = True
-                a = self.alpha
-                sm = [(a * nx + (1 - a) * ox, a * ny + (1 - a) * oy)
-                      for (nx, ny), (ox, oy) in zip(pts, self.prev[bi])]
+                sm = []
+                for landmark, ((nx, ny), (ox, oy)) in enumerate(
+                        zip(pts, self.prev[bi])):
+                    a = self._alpha_for(pts, self.prev[bi], landmark)
+                    sm.append((a * nx + (1 - a) * ox,
+                               a * ny + (1 - a) * oy))
             else:
                 sm = [(float(x), float(y)) for x, y in pts]
             out.append(sm)
+            out_labels.append(label)
+            out_missing.append(0)
+
+        # Dropout satu-dua frame umum saat tangan bergerak cepat. Menahan trek
+        # sebentar mencegah skeleton/portal berkedip dan pinch terlepas palsu.
+        for i, previous in enumerate(self.prev):
+            if len(out) >= 2:
+                break
+            if used[i]:
+                continue
+            missing = self.prev_missing[i] + 1
+            if missing <= self.missing_grace:
+                out.append(previous)
+                out_labels.append(self.prev_labels[i])
+                out_missing.append(missing)
+
         self.prev = out
+        self.prev_labels = out_labels
+        self.prev_missing = out_missing
         return [[(int(round(x)), int(round(y))) for x, y in pts] for pts in out]
 
 

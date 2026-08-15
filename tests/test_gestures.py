@@ -24,6 +24,28 @@ def test_hand_points_scales_normalized_landmarks_to_pixels():
     assert pts == [(320, 120), (640, 480)]
 
 
+def test_handedness_labels_follow_mediapipe_result_order():
+    class Category:
+        def __init__(self, name):
+            self.category_name = name
+
+    class Result:
+        handedness = [[Category("Left")], [Category("Right")]]
+
+    assert g.handedness_labels(Result()) == ["Left", "Right"]
+
+
+def test_handedness_labels_ignore_low_confidence_identity():
+    class Category:
+        category_name = "Left"
+        score = 0.51
+
+    class Result:
+        handedness = [[Category()]]
+
+    assert g.handedness_labels(Result()) == [None]
+
+
 def test_palm_scale_is_wrist_to_middle_mcp_distance():
     pts = make_hand(origin=(0, 0), scale=100.0)
     assert g.palm_scale(pts) == g.dist(pts[g.WRIST], pts[g.MIDDLE_MCP])
@@ -183,3 +205,64 @@ def test_smoother_returns_integer_pixel_points():
     s = g.HandSmoother()
     out = s.update([make_hand()])
     assert all(isinstance(v, int) for v in out[0][0])
+
+
+def test_smoother_uses_handedness_when_hands_cross():
+    left = make_hand(origin=(300, 300))
+    right = make_hand(origin=(700, 300))
+    s = g.HandSmoother(alpha=0.5, match_dist=1000.0, missing_grace=0)
+    s.update([left, right], ["Left", "Right"])
+    crossed_left = make_hand(origin=(680, 300))
+    crossed_right = make_hand(origin=(320, 300))
+    out = s.update([crossed_left, crossed_right], ["Left", "Right"])
+    # Tanpa handedness, nearest-wrist akan menukar kedua trek.
+    assert out[0][g.WRIST][0] == 490
+    assert out[1][g.WRIST][0] == 510
+
+
+def test_smoother_bridges_a_short_detector_dropout():
+    hand = make_hand(origin=(300, 300))
+    s = g.HandSmoother(alpha=0.5, missing_grace=2)
+    assert len(s.update([hand], ["Left"])) == 1
+    assert len(s.update([], [])) == 1
+    assert len(s.update([], [])) == 1
+    assert s.update([], []) == []
+
+
+def test_smoother_reset_forgets_tracks_immediately():
+    s = g.HandSmoother(missing_grace=2)
+    s.update([make_hand()], ["Left"])
+    s.reset()
+    assert s.update([], []) == []
+
+
+def test_smoother_exposes_fresh_vs_bridged_tracks():
+    s = g.HandSmoother(missing_grace=1)
+    s.update([make_hand()], ["Left"])
+    assert s.missing_counts == [0]
+    s.update([], [])
+    assert s.missing_counts == [1]
+
+
+def test_smoother_tracks_fast_fingertips_without_waiting_for_wrist_motion():
+    s = g.HandSmoother(missing_grace=0)
+    first = make_hand(origin=(320, 400))
+    s.update([first])
+    moved = first.copy()
+    moved[g.INDEX_TIP] = (first[g.INDEX_TIP][0] + 80,
+                          first[g.INDEX_TIP][1])
+    out = s.update([moved])
+    wrist_motion = abs(out[0][g.WRIST][0] - first[g.WRIST][0])
+    fingertip_motion = abs(out[0][g.INDEX_TIP][0]
+                           - first[g.INDEX_TIP][0])
+    assert wrist_motion == 0
+    assert fingertip_motion > 55
+
+
+def test_smoother_never_returns_more_than_two_tracks_on_label_flip():
+    s = g.HandSmoother(alpha=0.5, missing_grace=2)
+    left = make_hand(origin=(250, 300))
+    right = make_hand(origin=(850, 300))
+    s.update([left, right], ["Left", "Right"])
+    out = s.update([left, right], ["Right", "Left"])
+    assert len(out) == 2

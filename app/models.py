@@ -52,9 +52,9 @@ def make_landmarker(running_mode):
         base_options=mp_python.BaseOptions(model_asset_path=config.MODEL_PATH),
         running_mode=running_mode,
         num_hands=2,
-        min_hand_detection_confidence=0.7,
-        min_hand_presence_confidence=0.6,
-        min_tracking_confidence=0.6,
+        min_hand_detection_confidence=config.HAND_DETECTION_CONFIDENCE,
+        min_hand_presence_confidence=config.HAND_PRESENCE_CONFIDENCE,
+        min_tracking_confidence=config.HAND_TRACKING_CONFIDENCE,
     )
     return vision.HandLandmarker.create_from_options(options)
 
