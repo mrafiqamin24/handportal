@@ -26,6 +26,7 @@ FACE_MODEL_URL = (
 
 # ---------------------------------------------------------------- kamera
 CAM_INDEX = 0
+CAMERA_SCAN_MAX = 5         # tombol C / kontrol HUD mencoba indeks 0..nilai ini
 FRAME_W, FRAME_H = 1280, 720
 DETECT_WIDTH = 768         # detail fingertip lebih baik, masih lebih ringan dari 1280
 EFFECT_SCALE = 0.5         # filter layar-penuh dihitung di separuh resolusi
