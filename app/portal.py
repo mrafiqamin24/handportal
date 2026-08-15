@@ -104,6 +104,51 @@ def build_fingertip_quad(hands_pts, labels=None):
         hands_pts, config.PORTAL_MIN_AREA_SCALE, 0.35)
 
 
+def portal_pose_report(hands_pts):
+    """Alasan singkat kenapa pose portal ditolak, atau None kalau diterima.
+
+    Menyetel ambang portal tanpa tahu syarat mana yang gagal cuma jadi tebakan.
+    Fungsi ini memeriksa syarat yang sama persis dengan `build_fingertip_quad`,
+    dalam urutan yang sama, lalu menamai yang pertama gagal berikut angkanya —
+    supaya penyetelan berikutnya berdasar ukuran, bukan perasaan.
+
+    Sinkronnya dengan `build_fingertip_quad` dijaga oleh test, bukan oleh niat.
+    """
+    if len(hands_pts) != 2:
+        return f"perlu 2 tangan, terlihat {len(hands_pts)}"
+
+    scales = [palm_scale(hand) for hand in hands_pts]
+    scale = sum(scales) * 0.5
+    gap = dist(hands_pts[0][WRIST], hands_pts[1][WRIST]) / scale
+    if gap < config.PORTAL_MIN_HAND_GAP:
+        return (f"dua tangan terlalu rapat: {gap:.2f} < "
+                f"{config.PORTAL_MIN_HAND_GAP}")
+
+    for i, (hand, hand_scale) in enumerate(zip(hands_pts, scales), start=1):
+        if not fingers_extended(hand)[1]:
+            return f"telunjuk tangan-{i} belum lurus"
+        span = dist(hand[THUMB_TIP], hand[INDEX_TIP]) / hand_scale
+        if span < config.PORTAL_MIN_FINGER_SPAN:
+            return (f"bentang jempol-telunjuk tangan-{i} kurang lebar: "
+                    f"{span:.2f} < {config.PORTAL_MIN_FINGER_SPAN}")
+
+    left, right = sorted(hands_pts, key=lambda hand: hand[WRIST][0])
+    quad = np.asarray([
+        left[INDEX_TIP], right[INDEX_TIP],
+        right[THUMB_TIP], left[THUMB_TIP],
+    ], dtype=np.float32)
+    if len(cv2.convexHull(quad).reshape(-1, 2)) != 4:
+        return "empat ujung jari runtuh jadi segitiga/garis"
+    area = quad_envelope_area(quad) / (scale * scale)
+    if area < config.PORTAL_MIN_AREA_SCALE:
+        return (f"kotak terlalu kecil: {area:.2f} < "
+                f"{config.PORTAL_MIN_AREA_SCALE}")
+    shortest = min(dist(quad[i], quad[(i + 1) % 4]) for i in range(4)) / scale
+    if shortest < 0.35:
+        return f"sisi terpendek terlalu pendek: {shortest:.2f} < 0.35"
+    return None
+
+
 class PortalPoseDetector:
     """Akuisisi cepat + tracking toleran + grace waktu anti-flicker."""
 

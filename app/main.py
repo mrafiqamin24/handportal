@@ -26,8 +26,8 @@ from app.gestures import (DoublePinchDetector, GestureDebouncer, HandSmoother,
 from app.hud import Hud
 from app.models import make_face_detector, make_landmarker, mouth_from_faces
 from app.portal import (ParticleField, PortalPoseDetector, QuadSmoother,
-                        draw_corner_accents, draw_glow, render_portal,
-                        update_portal_alpha)
+                        draw_corner_accents, draw_glow, portal_pose_report,
+                        render_portal, update_portal_alpha)
 from app.scenes import GestureScenes
 
 WINDOW = "Foto-Kita-Blurrr"
@@ -143,6 +143,9 @@ def main():
     shot_count = 0
     show_hint = True
     hint_start = 0.0  # diisi `start` di bawah; ditekan ulang oleh tombol `h`
+    diagnose = False   # tombol `d`: sebutkan syarat portal mana yang gagal
+    diag_text = None
+    diag_at = 0.0
 
     prev_active = None
     start = time.time()
@@ -309,6 +312,17 @@ def main():
                     switch_effect((effect_idx + 1) % len(EFFECTS), t_now)
                     hud.notify(f"Filter: {EFFECT_NAMES[effect_idx]}", t_now)
 
+                if diagnose:
+                    # Diulang hanya saat alasannya berubah (atau tiap detik),
+                    # supaya konsol tidak tenggelam 30 baris per detik.
+                    reason = portal_pose_report(raw_hands)
+                    text = reason or "pose diterima"
+                    if text != diag_text or t_now - diag_at > 1.0:
+                        diag_text, diag_at = text, t_now
+                        hud.notify(f"Portal: {text}", t_now,
+                                   error=reason is not None)
+                        print(f"[portal] {text}")
+
                 raw_quad = portal_pose.update(
                     raw_hands, raw_labels, now=t_now,
                     hold=double_ev.pinching)
@@ -418,6 +432,17 @@ def main():
             elif key == ord("v"):
                 vignette_enabled = not vignette_enabled
                 print(f"Vignette: {'NYALA' if vignette_enabled else 'MATI'}")
+            elif key == ord("d"):
+                diagnose = not diagnose
+                diag_text = None
+                if diagnose and mode != MODE_PORTAL:
+                    hud.notify("Diagnosa portal: pindah ke Mode Portal", t_now,
+                               error=True)
+                else:
+                    hud.notify(
+                        f"Diagnosa portal: {'NYALA' if diagnose else 'MATI'}",
+                        t_now)
+                print(f"Diagnosa portal: {'NYALA' if diagnose else 'MATI'}")
             elif key == ord("h"):
                 # timer di-reset supaya hint benar-benar muncul lagi
                 show_hint = not show_hint

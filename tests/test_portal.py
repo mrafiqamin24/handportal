@@ -65,6 +65,47 @@ def test_fingertip_quad_rejects_collapsed_or_non_l_pose():
     assert portal.build_fingertip_quad([left, right]) is None
 
 
+def _pose_cases():
+    """Pose yang ditolak karena alasan berbeda-beda, untuk menguji diagnosa."""
+    ok_left = make_hand(extended=("thumb", "index"), origin=(300, 350))
+    ok_right = make_hand(extended=("thumb", "index"), origin=(900, 350))
+    return {
+        "diterima": [ok_left, ok_right],
+        "satu tangan": [ok_left],
+        "tanpa tangan": [],
+        "tangan rapat": [ok_left,
+                         make_hand(extended=("thumb", "index"),
+                                   origin=(330, 350))],
+        "jempol menempel": [
+            make_hand(extended=("index",), origin=(300, 350),
+                      thumb_index_gap=3),
+            make_hand(extended=("index",), origin=(900, 350),
+                      thumb_index_gap=3)],
+        "telunjuk menekuk": [
+            make_hand(extended=("thumb",), origin=(300, 350)),
+            make_hand(extended=("thumb",), origin=(900, 350))],
+    }
+
+
+@pytest.mark.parametrize("name", list(_pose_cases()))
+def test_pose_report_agrees_with_the_real_validator(name):
+    """Diagnosa harus diam persis ketika pose diterima, dan bicara persis
+    ketika ditolak. Kalau keduanya pernah tidak sepakat, diagnosanya berbohong
+    dan justru menyesatkan penyetelan ambang."""
+    hands = _pose_cases()[name]
+    accepted = portal.build_fingertip_quad(hands) is not None
+    reason = portal.portal_pose_report(hands)
+    assert accepted == (reason is None), f"{name}: {reason!r}"
+
+
+def test_pose_report_names_the_condition_that_failed():
+    hands = _pose_cases()["tangan rapat"]
+    assert "rapat" in portal.portal_pose_report(hands)
+    hands = _pose_cases()["telunjuk menekuk"]
+    assert "telunjuk" in portal.portal_pose_report(hands)
+    assert portal.portal_pose_report([]) == "perlu 2 tangan, terlihat 0"
+
+
 def test_portal_pose_appears_after_two_valid_frames():
     left = make_hand(extended=("thumb", "index"), origin=(300, 350))
     right = make_hand(extended=("thumb", "index"), origin=(900, 350))
