@@ -178,6 +178,7 @@ def classify_hand(pts):
 
 
 PinchEvent = collections.namedtuple("PinchEvent", "tap hold_started holding")
+DoublePinchEvent = collections.namedtuple("DoublePinchEvent", "triggered pinching")
 
 
 def pinch_distance(pts):
@@ -189,10 +190,21 @@ def pinch_distance(pts):
     return dist(pts[THUMB_TIP], pts[INDEX_TIP]) / palm_scale(pts)
 
 
+def is_ok_pose(pts, max_distance=config.PINCH_EXIT):
+    """True hanya untuk bentuk 👌, bukan genggaman dengan ujung jari berimpit.
+
+    Sentuhan jempol-telunjuk tetap menjadi pemicu temporal, tetapi tiga jari
+    lainnya wajib terbuka dan telunjuk tidak boleh lurus penuh.
+    """
+    _, index, middle, ring, pinky = fingers_extended(pts)
+    return (not index and middle and ring and pinky
+            and pinch_distance(pts) <= max_distance)
+
+
 class PinchTapDetector:
     """Satu mesin-status untuk kedua tangan sekaligus.
 
-        sentuh lalu lepas SEBELUM hold_s  -> TAP  (ganti efek)
+        sentuh lalu lepas SEBELUM hold_s  -> TAP  (tidak dipakai Mode Gestur)
         sentuh dan bertahan DI hold_s     -> HOLD (gestur OK)
 
     Masing-masing memicu tepat sekali per pinch. Dua ambang jarak berbeda
@@ -202,13 +214,17 @@ class PinchTapDetector:
     """
 
     def __init__(self, hold_s=config.PINCH_HOLD_S, enter=config.PINCH_ENTER,
-                 exit=config.PINCH_EXIT):
+                 exit=config.PINCH_EXIT,
+                 missing_grace=config.PINCH_MISSING_GRACE):
         self.hold_s = hold_s
         self.enter = enter
         self.exit = exit
+        self.missing_grace = missing_grace
         self._pinching = False
         self._start = 0.0
         self._held = False
+        self._missing = 0
+        self._last_d = float("inf")
 
     def adjust(self, delta):
         """Geser sensitivitas; selisih histeresis dipertahankan."""
@@ -217,9 +233,29 @@ class PinchTapDetector:
                          min(config.PINCH_MAX, self.enter + delta))
         self.exit = self.enter + gap
 
+    def reset(self):
+        self._pinching = False
+        self._start = 0.0
+        self._held = False
+        self._missing = 0
+        self._last_d = float("inf")
+
     def update(self, dists, now):
-        """`dists` = jarak pinch ternormalisasi tiap tangan; boleh kosong."""
-        d = min(dists) if dists else float("inf")
+        """`dists` = jarak pinch ternormalisasi tiap tangan; boleh kosong.
+
+        Daftar kosong berarti tak satu pun tangan sedang berpose 👌 pada frame
+        ini. Itu sering hanya kedipan MediaPipe, bukan jari yang benar-benar
+        dilepas, jadi jarak terakhir dipertahankan selama `missing_grace` frame
+        agar hitungan tahan 0,35 detik tidak selalu mulai dari nol.
+        """
+        if dists:
+            self._last_d = min(dists)
+            self._missing = 0
+        elif self._pinching and self._missing < self.missing_grace:
+            self._missing += 1
+        else:
+            self._last_d = float("inf")
+        d = self._last_d
         tap = False
         hold_started = False
         if self._pinching:
@@ -236,6 +272,60 @@ class PinchTapDetector:
             self._start = now
             self._held = False
         return PinchEvent(tap, hold_started, self._held)
+
+
+class DoublePinchDetector:
+    """Gesture empat-jari untuk mengganti filter di Mode Portal.
+
+    Kedua pasangan thumb-index harus sama-sama masuk ambang selama beberapa
+    frame. Setelah memicu, detector baru siap lagi ketika kedua pasangan sudah
+    benar-benar terbuka. Ini mencegah satu tangan, jitter, atau dropout detector
+    mengganti filter berulang kali.
+    """
+
+    def __init__(self, enter=config.PINCH_ENTER, exit=config.PINCH_EXIT,
+                 stable_frames=config.DOUBLE_PINCH_STABLE_FRAMES,
+                 release_frames=config.DOUBLE_PINCH_RELEASE_FRAMES):
+        self.enter = enter
+        self.exit = exit
+        self.stable_frames = stable_frames
+        self.release_frames = release_frames
+        self._armed = True
+        self._close_count = 0
+        self._release_count = 0
+
+    def adjust(self, delta):
+        gap = self.exit - self.enter
+        self.enter = max(config.PINCH_MIN,
+                         min(config.PINCH_MAX, self.enter + delta))
+        self.exit = self.enter + gap
+
+    def reset(self):
+        self._armed = True
+        self._close_count = 0
+        self._release_count = 0
+
+    def update(self, dists):
+        exactly_two = len(dists) == 2
+        both_closed = exactly_two and max(dists) < self.enter
+        both_open = exactly_two and min(dists) > self.exit
+        triggered = False
+
+        if self._armed:
+            self._close_count = self._close_count + 1 if both_closed else 0
+            if self._close_count >= self.stable_frames:
+                self._armed = False
+                self._close_count = 0
+                triggered = True
+        else:
+            # Kehilangan tangan tidak langsung dianggap release: tunggu dua
+            # tangan terlihat dan terbuka agar dropout tak memicu ulang.
+            self._release_count = self._release_count + 1 if both_open else 0
+            if self._release_count >= self.release_frames:
+                self._armed = True
+                self._release_count = 0
+
+        return DoublePinchEvent(triggered, both_closed)
 
 
 def detect_two_hand_heart(hands_pts, w):

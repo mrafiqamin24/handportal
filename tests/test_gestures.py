@@ -110,6 +110,19 @@ def test_classify_returns_none_for_fist():
     assert g.classify_hand(make_hand(extended=())) is None
 
 
+def test_fist_is_not_an_ok_pose_even_when_thumb_and_index_are_close():
+    fist = make_hand(extended=())
+    assert g.pinch_distance(fist) < g.config.PINCH_ENTER
+    assert g.is_ok_pose(fist) is False
+
+
+def test_ok_pose_requires_three_other_fingers_open():
+    ok = make_hand(extended=("middle", "ring", "pinky"), thumb_index_gap=8)
+    assert g.is_ok_pose(ok) is True
+    missing_ring = make_hand(extended=("middle", "pinky"), thumb_index_gap=8)
+    assert g.is_ok_pose(missing_ring) is False
+
+
 def test_classify_returns_none_for_open_palm():
     # telapak terbuka penuh bukan gestur apa pun -> tidak boleh salah kenal
     assert g.classify_hand(make_hand(extended=("thumb", "index", "middle",

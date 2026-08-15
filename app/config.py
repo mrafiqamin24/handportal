@@ -51,11 +51,19 @@ HAND_MISSING_GRACE = 2     # tahan landmark 2 frame saat detector sesaat dropout
 # Jarak ternormalisasi ujung jempol <-> ujung telunjuk. Dua ambang berbeda
 # (histeresis): masuk lebih ketat daripada keluar, supaya jitter landmark di
 # sekitar ambang tidak memicu tap beruntun.
-PINCH_ENTER = 0.055
-PINCH_EXIT = 0.075
-PINCH_HOLD_S = 0.35        # <0,35 dtk = TAP (ganti efek); >=0,35 dtk = HOLD (OK)
-PINCH_STEP = 0.005         # langkah penyetelan sensitivitas lewat tombol +/-
-PINCH_MIN, PINCH_MAX = 0.015, 0.20
+# `pinch_distance` dibagi wrist->middle-MCP (bagian telapak yang relatif pendek),
+# jadi nilai realistis saat dua ujung jari bertemu berada sekitar 0.20-0.50,
+# bukan 0.05. Ambang lama terlalu ketat dan membuat pergantian efek nyaris mati.
+PINCH_ENTER = 0.50
+PINCH_EXIT = 0.72
+PINCH_HOLD_S = 0.35        # pinch satu tangan ditahan >=0,35 dtk = gestur OK
+PINCH_STEP = 0.03          # langkah penyetelan sensitivitas lewat tombol +/-
+PINCH_MIN, PINCH_MAX = 0.15, 1.00
+# Pose 👌 OK sesekali gagal diklasifikasi satu-dua frame. Tanpa grace ini,
+# timer 0,35 dtk mulai dari nol lagi setiap kali, dan OK nyaris tak bisa dipicu.
+PINCH_MISSING_GRACE = 3
+DOUBLE_PINCH_STABLE_FRAMES = 3
+DOUBLE_PINCH_RELEASE_FRAMES = 3
 
 # ---------------------------------------------------------------- transisi
 CROSSFADE_S = 0.22         # lama crossfade antar-filter
