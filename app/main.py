@@ -4,6 +4,7 @@ Satu-satunya modul yang menyentuh kamera, jam, dan keyboard. Semua logika yang
 bisa di-test tanpa perangkat keras ada di modul lain.
 """
 
+import collections
 import math
 import os
 import random
@@ -17,14 +18,16 @@ from app import config
 from app.audio import AudioPlayer
 from app.draw import (draw_hand_skeleton, hsv_color, lerp_color,
                       make_vignette_layer)
-from app.effects import EFFECT_NAMES, EFFECTS
-from app.gestures import (INDEX_TIP, GestureDebouncer, HandSmoother,
+from app.effects import EFFECT_NAMES, EFFECTS, FilterTransition
+from app.gestures import (DoublePinchDetector, GestureDebouncer, HandSmoother,
                           PinchTapDetector, classify_hand, detect_kicaw,
-                          detect_two_hand_heart, hand_points, pinch_distance)
+                          detect_two_hand_heart, hand_points,
+                          handedness_labels, is_ok_pose, pinch_distance)
 from app.hud import Hud
 from app.models import make_face_detector, make_landmarker, mouth_from_faces
-from app.portal import (ParticleField, QuadSmoother, build_box,
-                        draw_corner_accents, draw_glow, render_portal)
+from app.portal import (ParticleField, PortalPoseDetector, QuadSmoother,
+                        draw_corner_accents, draw_glow, render_portal,
+                        update_portal_alpha)
 from app.scenes import GestureScenes
 
 WINDOW = "Foto-Kita-Blurrr"
@@ -34,22 +37,54 @@ MODE_GESTURE = "GESTUR"
 MODE_PORTAL = "PORTAL"
 
 
-def open_camera():
-    """Buka webcam dengan resolusi yang diminta. Keluar kalau tidak ada."""
-    cap = cv2.VideoCapture(config.CAM_INDEX, cv2.CAP_DSHOW)
+def _make_capture(index):
+    """Buat VideoCapture dengan backend native yang sesuai platform."""
+    if os.name == "nt":
+        return cv2.VideoCapture(index, cv2.CAP_DSHOW)
+    return cv2.VideoCapture(index)
+
+
+def open_camera(index=None, required=True, capture_factory=None):
+    """Buka satu webcam. Return None saat probe opsional gagal."""
+    index = config.CAM_INDEX if index is None else int(index)
+    factory = capture_factory or _make_capture
+    cap = factory(index)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_W)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_H)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     if not cap.isOpened():
+        cap.release()
+        if not required:
+            return None
         raise SystemExit(
             "Kamera tidak bisa dibuka. Pastikan webcam tersambung dan tidak "
             f"dipakai aplikasi lain, atau ubah CAM_INDEX (sekarang "
-            f"{config.CAM_INDEX}) di app/config.py."
+            f"{index}) di app/config.py."
         )
     return cap
 
 
+def switch_camera(cap, current_index, open_fn=open_camera, scan_max=None):
+    """Cari kamera berikutnya tanpa mematikan kamera aktif lebih dahulu.
+
+    Kamera lama baru dilepas setelah kandidat berhasil dibuka. Jika semua
+    indeks gagal, aplikasi tetap memakai kamera lama dan tidak blank.
+    """
+    scan_max = config.CAMERA_SCAN_MAX if scan_max is None else int(scan_max)
+    for step in range(1, scan_max + 2):
+        index = (current_index + step) % (scan_max + 1)
+        if index == current_index:
+            continue
+        candidate = open_fn(index, required=False)
+        if candidate is not None:
+            cap.release()
+            return candidate, index, True
+    return cap, current_index, False
+
+
 def main():
     cap = open_camera()
+    camera_index = config.CAM_INDEX
     cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
     if config.FULLSCREEN:
         cv2.setWindowProperty(WINDOW, cv2.WND_PROP_FULLSCREEN,
@@ -60,33 +95,45 @@ def main():
     smoother = HandSmoother()
     debouncer = GestureDebouncer()
     pinch = PinchTapDetector()
+    double_pinch = DoublePinchDetector()
     face_detector = make_face_detector(vision.RunningMode.VIDEO)
 
     effect_idx = 0
-    prev_effect_idx = None     # filter yang sedang di-crossfade keluar
-    crossfade_start = 0.0
+    effect_transition = FilterTransition(effect_idx)
     label_from = None          # nama filter yang sedang slide keluar
     label_start = 0.0
 
     def switch_effect(new_idx, now):
         """Pindah filter dengan crossfade + animasi label."""
-        nonlocal effect_idx, prev_effect_idx, crossfade_start
+        nonlocal effect_idx
         nonlocal label_from, label_start
-        if new_idx == effect_idx:
+        source_idx = effect_transition.switch(new_idx, now)
+        if source_idx is None:
             return
-        prev_effect_idx = effect_idx
-        crossfade_start = now
-        label_from = EFFECT_NAMES[effect_idx]
+        label_from = EFFECT_NAMES[source_idx]
         label_start = now
-        effect_idx = new_idx
+        effect_idx = effect_transition.current_idx
 
     mode = MODE_GESTURE
     quad_smoother = QuadSmoother()
+    portal_pose = PortalPoseDetector()
     particles = ParticleField()
     portal_alpha = 0.0
     last_quad = None
+    cached_mouth = None
+    last_face_detect_at = float("-inf")
+    last_mouth_seen_at = float("-inf")
 
     hud = Hud()
+    pending_actions = collections.deque()
+    frame_width = config.FRAME_W
+
+    def on_mouse(event, x, y, _flags, _userdata):
+        action = hud.pointer(x, y, frame_width)
+        if event == cv2.EVENT_LBUTTONUP and action is not None:
+            pending_actions.append(action)
+
+    cv2.setMouseCallback(WINDOW, on_mouse)
     fps = 30.0
     fps_accum = 0.0
     fps_frames = 0
@@ -103,6 +150,49 @@ def main():
     t_prev = start
     last_ts = -1  # timestamp ms terakhir (harus selalu naik)
 
+    def change_mode(new_mode, now):
+        nonlocal mode, prev_active, portal_alpha, last_quad
+        nonlocal cached_mouth, last_face_detect_at, last_mouth_seen_at
+        if new_mode == mode:
+            return
+        mode = new_mode
+        for sound_key in SOUND_FOR.values():
+            audio.stop(sound_key)
+        prev_active = None
+        debouncer.force(None)
+        pinch.reset()
+        double_pinch.reset()
+        portal_pose.reset()
+        quad_smoother.reset()
+        portal_alpha = 0.0
+        last_quad = None
+        particles.particles.clear()
+        cached_mouth = None
+        last_face_detect_at = float("-inf")
+        last_mouth_seen_at = float("-inf")
+        hud.notify(f"Mode {mode.title()} aktif", now)
+        print(f"Mode: {mode}")
+
+    def change_camera(now):
+        nonlocal cap, camera_index
+        nonlocal cached_mouth, last_face_detect_at, last_mouth_seen_at
+        cap, next_index, changed = switch_camera(cap, camera_index)
+        if changed:
+            camera_index = next_index
+            smoother.reset()
+            pinch.reset()
+            double_pinch.reset()
+            portal_pose.reset()
+            quad_smoother.reset()
+            cached_mouth = None
+            last_face_detect_at = float("-inf")
+            last_mouth_seen_at = float("-inf")
+            hud.notify(f"Kamera {camera_index + 1} aktif", now)
+            print(f"Kamera: {camera_index + 1} (index {camera_index})")
+        else:
+            hud.notify("Tidak ada kamera lain", now, error=True)
+            print("Kamera lain tidak ditemukan; kamera aktif dipertahankan.")
+
     with make_landmarker(vision.RunningMode.VIDEO) as landmarker:
         while True:
             ok, frame = cap.read()
@@ -110,6 +200,7 @@ def main():
                 break
             frame = cv2.flip(frame, 1)  # mode selfie / cermin
             h, w = frame.shape[:2]
+            frame_width = w
             t_now = time.time()
             # dijepit: jeda panjang (window di-drag, laptop bangun tidur)
             # tidak boleh melompatkan animasi
@@ -131,24 +222,32 @@ def main():
             result = landmarker.detect_for_video(mp_image, ts)
 
             mouth = None
-            if face_detector is not None:
+            face_due = (t_now - last_face_detect_at
+                        >= config.FACE_DETECT_INTERVAL_S)
+            if (mode == MODE_GESTURE and face_detector is not None
+                    and face_due):
                 face_res = face_detector.detect_for_video(mp_image, ts)
-                mouth = mouth_from_faces(face_res, w, h)
+                last_face_detect_at = t_now
+                detected_mouth = mouth_from_faces(face_res, w, h)
+                if detected_mouth is not None:
+                    cached_mouth = detected_mouth
+                    last_mouth_seen_at = t_now
+            if (mode == MODE_GESTURE and cached_mouth is not None
+                    and t_now - last_mouth_seen_at
+                    <= config.FACE_MOUTH_CACHE_S):
+                mouth = cached_mouth
 
-            hands_pts = smoother.update(
-                [hand_points(lm, w, h) for lm in result.hand_landmarks])
+            raw_hands = [hand_points(lm, w, h)
+                         for lm in result.hand_landmarks]
+            raw_labels = handedness_labels(result)
+            hands_pts = smoother.update(raw_hands, raw_labels)
+            # Trek bridge hanya untuk menjaga gambar skeleton tidak berkedip.
+            # Klasifikasi gestur selalu memakai observasi frame terbaru.
+            fresh_hands = [pts for pts, missing in
+                           zip(hands_pts, smoother.missing_counts)
+                           if missing == 0]
 
-            # Pinch: TAP mengganti efek, HOLD memunculkan gestur 👌 OK.
-            ev = pinch.update([pinch_distance(p) for p in hands_pts], t_now)
-            if ev.tap:
-                switch_effect((effect_idx + 1) % len(EFFECTS), t_now)
-
-            if prev_effect_idx is not None:
-                blend = min(1.0, (t_now - crossfade_start) / config.CROSSFADE_S)
-                if blend >= 1.0:
-                    prev_effect_idx = None
-            else:
-                blend = 1.0
+            prev_effect_idx, blend = effect_transition.state(t_now)
 
             # Dipakai kedua mode, jadi dihitung sekali di sini.
             t_anim = t_now - start
@@ -160,16 +259,22 @@ def main():
                                 0.5 + 0.5 * math.sin(t_anim * 1.25))
 
             if mode == MODE_GESTURE:
+                # Pinch satu tangan hanya untuk 👌 OK. Efek portal tidak pernah
+                # dipakai/diganti di sini; Peace punya blur latarnya sendiri.
+                gesture_dists = [pinch_distance(p) for p in fresh_hands
+                                 if is_ok_pose(p, pinch.exit)]
+                ev = pinch.update(gesture_dists, t_now)
+                double_pinch.reset()
                 # Tentukan gestur frame ini (pose dua tangan diprioritaskan).
                 current = None
-                if detect_two_hand_heart(hands_pts, w):
+                if detect_two_hand_heart(fresh_hands, w):
                     current = "HEART"
-                elif detect_kicaw(hands_pts, w, h, mouth):
+                elif detect_kicaw(fresh_hands, w, h, mouth):
                     current = "KICAW"
                 elif ev.holding:
                     current = "OK"
                 else:
-                    for pts in hands_pts:
+                    for pts in fresh_hands:
                         g = classify_hand(pts)
                         if g is not None:
                             current = g
@@ -182,27 +287,38 @@ def main():
                     active = "OK"
                     debouncer.force("OK")
 
+                # Revisi pengguna: hanya ✌️ Peace yang mengaburkan kamera.
+                # Blur dilakukan sebelum skeleton/text agar overlay tetap tajam.
+                frame = scenes.apply_background(frame, active)
                 for pts in hands_pts:
                     draw_hand_skeleton(frame, pts, hsv_color(t_now * 0.25))
                 if active:
-                    scenes.render(frame, active, t_now,
-                                  effect_fn=EFFECTS[effect_idx],
-                                  prev_effect_fn=prev_fn, blend=blend)
+                    scenes.render(frame, active, t_now)
             else:
                 # Mode Portal: kelima gestur dilewati sepenuhnya — inilah yang
                 # menghilangkan salah-deteksi antara portal dan gestur.
                 active = None
-                quad = None
-                if len(hands_pts) == 2:
-                    quad = quad_smoother.update(build_box(
-                        hands_pts[0][INDEX_TIP], hands_pts[1][INDEX_TIP]))
-                else:
+                # Double-pinch = thumb+index kedua tangan bertemu bersamaan.
+                # Hanya gesture empat-jari ini yang mengganti filter.
+                # Portal langsung memakai landmark MediaPipe terbaru. Jalur
+                # lama menghaluskan tangan lalu quad sekali lagi (double
+                # smoothing), penyebab utama portal terasa tertinggal.
+                fresh_dists = [pinch_distance(p) for p in raw_hands]
+                double_ev = double_pinch.update(fresh_dists)
+                if double_ev.triggered:
+                    switch_effect((effect_idx + 1) % len(EFFECTS), t_now)
+                    hud.notify(f"Filter: {EFFECT_NAMES[effect_idx]}", t_now)
+
+                raw_quad = portal_pose.update(
+                    raw_hands, raw_labels, now=t_now,
+                    hold=double_ev.pinching)
+                quad = (quad_smoother.update(raw_quad, t_now)
+                        if raw_quad is not None else None)
+                if raw_quad is None and not portal_pose.active:
                     quad_smoother.reset()
 
-                # fade in/out eksponensial supaya portal muncul dan hilang halus
-                target = 1.0 if quad is not None else 0.0
-                portal_alpha += (target - portal_alpha) * (
-                    1.0 - math.exp(-dt / config.PORTAL_FADE_S))
+                portal_alpha = update_portal_alpha(
+                    portal_alpha, quad is not None, dt)
                 if quad is not None:
                     last_quad = quad
                 elif portal_alpha < 0.01:
@@ -236,7 +352,7 @@ def main():
                     audio.play(new_key)
             prev_active = active
 
-            if vignette_enabled:
+            if vignette_enabled and mode == MODE_PORTAL:
                 if (vignette_layer is None
                         or vignette_layer.shape[:2] != (h, w)):
                     vignette_layer = make_vignette_layer(w, h)
@@ -256,33 +372,41 @@ def main():
                     label_from = None
             hud.draw(frame, mode, effect_idx, EFFECT_NAMES[effect_idx],
                      label_from, label_p, fps, accent,
-                     elapsed=(t_now - hint_start) if show_hint else 1e9)
+                     elapsed=(t_now - hint_start) if show_hint else 1e9,
+                     camera_index=camera_index, now=t_now)
 
             cv2.imshow(WINDOW, frame)
             key = cv2.waitKey(1) & 0xFF
+            while pending_actions:
+                action = pending_actions.popleft()
+                if action.startswith("mode:"):
+                    change_mode(action.split(":", 1)[1], t_now)
+                elif action == "camera:next":
+                    change_camera(t_now)
             if key in (ord("q"), 27):  # q / ESC
                 break
             elif key == 9:  # TAB
-                mode = MODE_PORTAL if mode == MODE_GESTURE else MODE_GESTURE
-                for k in SOUND_FOR.values():
-                    audio.stop(k)
-                prev_active = None
-                quad_smoother.reset()
-                portal_alpha = 0.0
-                last_quad = None
-                print(f"Mode: {mode}")
+                change_mode(
+                    MODE_PORTAL if mode == MODE_GESTURE else MODE_GESTURE,
+                    t_now)
+            elif key == ord("c"):
+                change_camera(t_now)
             elif ord("1") <= key <= ord("9"):
                 n = key - ord("1")
-                if n < len(EFFECTS):
+                if mode != MODE_PORTAL:
+                    hud.notify("Filter hanya di Mode Portal", t_now, error=True)
+                elif n < len(EFFECTS):
                     switch_effect(n, t_now)
                     print(f"Efek: {EFFECT_NAMES[effect_idx]}")
             elif key == ord("m"):
                 print(f"Audio: {'BISU' if audio.toggle_mute() else 'NYALA'}")
             elif key in (ord("+"), ord("=")):
                 pinch.adjust(config.PINCH_STEP)
+                double_pinch.adjust(config.PINCH_STEP)
                 print(f"Ambang pinch: {pinch.enter:.3f}")
             elif key == ord("-"):
                 pinch.adjust(-config.PINCH_STEP)
+                double_pinch.adjust(-config.PINCH_STEP)
                 print(f"Ambang pinch: {pinch.enter:.3f}")
             elif key == ord("s"):
                 os.makedirs(config.SHOTS_DIR, exist_ok=True)

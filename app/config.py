@@ -31,6 +31,8 @@ FRAME_W, FRAME_H = 1280, 720
 DETECT_WIDTH = 768         # detail fingertip lebih baik, masih lebih ringan dari 1280
 EFFECT_SCALE = 0.5         # filter layar-penuh dihitung di separuh resolusi
 PORTAL_EFFECT_SCALE = 0.50 # isi portal: kurangi spike efek berat/crossfade
+FACE_DETECT_INTERVAL_S = 0.10  # wajah cukup 10 Hz; tangan tetap setiap frame
+FACE_MOUTH_CACHE_S = 0.25      # tahan posisi mulut di antara inferensi wajah
 
 # MediaPipe Tasks. Nilai sedikit di atas bawaan menahan false positive tanpa
 # membuat tangan yang sedang bergerak cepat terlalu mudah hilang.
