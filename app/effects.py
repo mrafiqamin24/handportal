@@ -17,6 +17,55 @@ import numpy as np
 from app import config
 
 
+class FilterTransition:
+    """State machine crossfade yang aman saat pengguna mengganti efek cepat.
+
+    Retarget di tengah transisi dimulai dari efek yang saat itu paling dominan,
+    lalu memakai smoothstep agar kecepatan visual tidak patah di awal/akhir.
+    """
+
+    def __init__(self, current_idx=0, duration=config.CROSSFADE_S):
+        self.current_idx = int(current_idx)
+        self.previous_idx = None
+        self.duration = max(float(duration), 1e-6)
+        self.started_at = 0.0
+
+    @staticmethod
+    def _ease(p):
+        p = max(0.0, min(1.0, float(p)))
+        return p * p * (3.0 - 2.0 * p)
+
+    def state(self, now):
+        """Return (previous_idx, eased_blend) dan selesaikan state bila penuh."""
+        if self.previous_idx is None:
+            return None, 1.0
+        linear = max(0.0, min(1.0, (float(now) - self.started_at)
+                                  / self.duration))
+        blend = self._ease(linear)
+        previous = self.previous_idx
+        if linear >= 1.0:
+            self.previous_idx = None
+            return None, 1.0
+        return previous, blend
+
+    def switch(self, new_idx, now):
+        """Pilih target baru. Return indeks sumber untuk animasi label/efek."""
+        new_idx = int(new_idx)
+        if new_idx == self.current_idx:
+            return None
+
+        previous, blend = self.state(now)
+        if previous is None:
+            source = self.current_idx
+        else:
+            source = self.current_idx if blend >= 0.5 else previous
+
+        self.current_idx = new_idx
+        self.started_at = float(now)
+        self.previous_idx = None if source == new_idx else source
+        return source
+
+
 def _odd_kernel(img, want):
     """Ukuran kernel ganjil yang tidak pernah melebihi gambar.
 
@@ -127,13 +176,61 @@ def fx_duotone(img):
     return _DUOTONE_LUT[gray]
 
 
+def fx_night_vision(img):
+    """Night vision hijau dengan kontras luminance dan scanline lembut."""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.equalizeHist(gray)
+    out = np.zeros_like(img)
+    out[..., 0] = gray // 8
+    out[..., 1] = gray
+    out[..., 2] = gray // 5
+    if out.shape[0] > 1:
+        out[1::4] = cv2.multiply(
+            out[1::4], np.array([205], np.uint8), scale=1.0 / 255.0)
+    return out
+
+
+def fx_vhs(img):
+    """Pemisahan kanal, tint analog, dan scanline ala kaset VHS."""
+    b, g, r = cv2.split(img)
+    shift = max(1, min(6, img.shape[1] // 40))
+    out = cv2.merge([np.roll(b, -shift, axis=1), g,
+                     np.roll(r, shift, axis=1)])
+    tint = np.full_like(out, (12, 2, 18))
+    out = cv2.add(out, tint)
+    out[::3] = cv2.multiply(
+        out[::3], np.array([190], np.uint8), scale=1.0 / 255.0)
+    return out
+
+
+def fx_comic_ink(img):
+    """Warna komik terkuantisasi dengan kontur tinta hitam."""
+    quantized = ((img // 48) * 48 + 24).astype(np.uint8)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 70, 150)
+    out = quantized.copy()
+    out[edges > 0] = (8, 8, 8)
+    return out
+
+
+def fx_emboss_chrome(img):
+    """Relief metalik dari gradien luminance, diberi colormap bone."""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    kernel = np.array([[-2, -1, 0], [-1, 1, 1], [0, 1, 2]], np.float32)
+    relief = cv2.filter2D(gray, cv2.CV_16S, kernel)
+    relief = np.clip(relief + 128, 0, 255).astype(np.uint8)
+    return cv2.applyColorMap(relief, cv2.COLORMAP_BONE)
+
+
 EFFECTS = [
     fx_blur, fx_thermal, fx_edge_mesh, fx_posterize_neon, fx_invert_glitch,
-    fx_sketch, fx_chromatic, fx_pixel_mosaic, fx_duotone,
+    fx_sketch, fx_chromatic, fx_pixel_mosaic, fx_duotone, fx_night_vision,
+    fx_vhs, fx_comic_ink, fx_emboss_chrome,
 ]
 EFFECT_NAMES = [
     "Blur", "Thermal", "Edge Mesh", "Posterize Neon", "Invert Glitch",
-    "Sketch", "Chromatic", "Pixel Mosaic", "Duotone",
+    "Sketch", "Chromatic", "Pixel Mosaic", "Duotone", "Night Vision",
+    "VHS", "Comic Ink", "Emboss Chrome",
 ]
 
 

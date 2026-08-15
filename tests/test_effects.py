@@ -38,7 +38,7 @@ def test_effect_survives_tiny_crops(fn, size):
 
 
 def test_effects_and_names_line_up():
-    assert len(effects.EFFECTS) == len(effects.EFFECT_NAMES) == 9
+    assert len(effects.EFFECTS) == len(effects.EFFECT_NAMES) == 13
     assert effects.EFFECT_NAMES[0] == "Blur"
 
 
@@ -62,3 +62,24 @@ def test_apply_full_frame_does_not_mutate_its_input():
     before = img.copy()
     effects.apply_full_frame(img, effects.fx_posterize_neon)
     assert np.array_equal(img, before)
+
+
+def test_filter_transition_eases_and_finishes():
+    t = effects.FilterTransition(current_idx=0, duration=1.0)
+    assert t.switch(1, 10.0) == 0
+    previous, blend = t.state(10.25)
+    assert previous == 0
+    assert blend == pytest.approx(0.15625)
+    assert t.state(11.0) == (None, 1.0)
+
+
+def test_filter_transition_retargets_from_dominant_visible_effect():
+    t = effects.FilterTransition(current_idx=0, duration=1.0)
+    t.switch(1, 0.0)
+    # Baru 20%: efek lama masih dominan, jadi retarget berangkat dari 0.
+    assert t.switch(2, 0.2) == 0
+    assert t.current_idx == 2
+    assert t.previous_idx == 0
+    # Setelah target dominan, retarget berikutnya berangkat dari target itu.
+    t.state(0.9)
+    assert t.switch(3, 0.9) == 2
