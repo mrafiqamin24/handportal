@@ -224,8 +224,9 @@ def build_hint_panel():
     """Petunjuk tombol singkat; memudar beberapa detik setelah aplikasi mulai."""
     if not PIL_AVAILABLE:
         return None
-    txt = ("pinch cepat: ganti efek  |  TAB: mode  |  1-9: efek  |  "
-           "f: layar penuh  |  s: simpan  |  q: keluar")
+    txt = ("PORTAL: bentuk L dengan 2 tangan, double-pinch: efek  |  "
+           "1-9 / [ ]: filter  |  klik mode / TAB  |  kamera: klik / C  |  "
+           "q: keluar")
     font = _font(12)
     W = _text_width(txt, font) + 36
     H = 28

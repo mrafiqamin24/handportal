@@ -411,6 +411,18 @@ def main():
                     hud.notify("Filter hanya di Mode Portal", t_now, error=True)
                 elif n < len(EFFECTS):
                     switch_effect(n, t_now)
+                    hud.notify(f"Filter: {EFFECT_NAMES[effect_idx]}", t_now)
+                    print(f"Efek: {EFFECT_NAMES[effect_idx]}")
+            elif key in (ord("["), ord("]")):
+                # Tombol angka hanya menjangkau sembilan filter pertama; ini
+                # yang membuat keempat filter terakhir bisa diraih dari papan
+                # ketik, bukan cuma lewat double-pinch berulang.
+                if mode != MODE_PORTAL:
+                    hud.notify("Filter hanya di Mode Portal", t_now, error=True)
+                else:
+                    step = 1 if key == ord("]") else -1
+                    switch_effect((effect_idx + step) % len(EFFECTS), t_now)
+                    hud.notify(f"Filter: {EFFECT_NAMES[effect_idx]}", t_now)
                     print(f"Efek: {EFFECT_NAMES[effect_idx]}")
             elif key == ord("m"):
                 print(f"Audio: {'BISU' if audio.toggle_mute() else 'NYALA'}")
