@@ -29,6 +29,7 @@ CAM_INDEX = 0
 FRAME_W, FRAME_H = 1280, 720
 DETECT_WIDTH = 768         # detail fingertip lebih baik, masih lebih ringan dari 1280
 EFFECT_SCALE = 0.5         # filter layar-penuh dihitung di separuh resolusi
+PORTAL_EFFECT_SCALE = 0.50 # isi portal: kurangi spike efek berat/crossfade
 
 # MediaPipe Tasks. Nilai sedikit di atas bawaan menahan false positive tanpa
 # membuat tangan yang sedang bergerak cepat terlalu mudah hilang.
@@ -68,7 +69,8 @@ DOUBLE_PINCH_RELEASE_FRAMES = 3
 # ---------------------------------------------------------------- transisi
 CROSSFADE_S = 0.22         # lama crossfade antar-filter
 LABEL_ANIM_S = 0.30        # lama animasi slide label nama efek
-PORTAL_FADE_S = 0.30       # tetapan waktu fade in/out portal
+PORTAL_FADE_IN_S = 0.07    # materialisasi cepat, sekitar 2 frame pada 30 FPS
+PORTAL_FADE_OUT_S = 0.18   # keluar tetap lembut setelah grace kehilangan tangan
 
 # ---------------------------------------------------------------- HUD
 HINT_SHOW_S = 5.0          # hint kontrol tampil selama ini...
@@ -80,6 +82,17 @@ FEATHER_SIGMA = 2.0
 GLOW_PAD = 26              # seberapa jauh glow melebar dari tepi kotak
 GLOW_SIGMA = 9.0
 MAX_PARTICLES = 150
+PORTAL_ACQUIRE_FRAMES = 2  # respons cepat: konfirmasi dua frame berturut-turut
+PORTAL_LOST_GRACE_S = 0.45 # jangan hilang karena landmark berkedip sesaat
+PORTAL_MIN_FINGER_SPAN = 1.20  # jarak thumb-index / ukuran telapak per tangan
+PORTAL_MIN_HAND_GAP = 1.50     # jarak dua wrist / rata-rata ukuran telapak
+PORTAL_MIN_AREA_SCALE = 3.0    # luas quad minimum / palm_scale^2
+PORTAL_TRACK_MIN_AREA_SCALE = 1.2  # validasi lebih toleran setelah terkunci
+# Portal hanya melewati satu filter adaptif. Cutoff dasar ini masih meredam
+# jitter saat diam, sementara beta tinggi segera membuka filter saat jari gerak.
+PORTAL_ONE_EURO_MIN_CUTOFF = 1.8
+PORTAL_ONE_EURO_BETA = 0.035
+PORTAL_ONE_EURO_D_CUTOFF = 1.0
 
 # ---------------------------------------------------------------- warna (BGR)
 ACCENT = (255, 170, 64)         # cyan listrik

@@ -1,4 +1,4 @@
-"""Portal: jendela persegi di antara dua ujung telunjuk, isinya kena filter.
+"""Portal empat-jari: thumb + index dari tangan kiri dan kanan menjadi sudut.
 
 Aturan permanen modul ini: **isi portal tidak pernah di-warp perspektif.**
 Wilayah kotak di-crop, filter diterapkan apa adanya, hasilnya ditempel kembali
@@ -16,6 +16,153 @@ import numpy as np
 
 from app import config
 from app.draw import dim_color
+from app.gestures import (INDEX_TIP, THUMB_TIP, WRIST, dist,
+                          fingers_extended, palm_scale)
+
+
+def polygon_area(quad_pts):
+    """Luas absolut polygon berurutan, memakai shoelace formula."""
+    x = quad_pts[:, 0]
+    y = quad_pts[:, 1]
+    return abs(float(np.dot(x, np.roll(y, -1))
+                     - np.dot(y, np.roll(x, -1)))) * 0.5
+
+
+def quad_envelope_area(quad_pts):
+    """Luas selubung empat titik, tetap valid untuk portal silang/X."""
+    hull = cv2.convexHull(np.asarray(quad_pts, dtype=np.float32))
+    return abs(float(cv2.contourArea(hull)))
+
+
+def _quad_from_fingertips(hands_pts, min_area_scale, min_edge_scale):
+    """Geometri empat ujung jari dengan identitas sudut yang permanen.
+
+    Urutannya adalah index-kiri, index-kanan, thumb-kanan, thumb-kiri. Berbeda
+    dari convex hull, urutan semantik ini sengaja dipertahankan: saat satu
+    tangan diputar, dua sisi boleh bersilangan dan membentuk portal X seperti
+    referensi pengguna.
+    """
+    if len(hands_pts) != 2:
+        return None
+    left, right = sorted(hands_pts, key=lambda hand: hand[WRIST][0])
+    scales = [palm_scale(left), palm_scale(right)]
+    scale = sum(scales) * 0.5
+    quad = np.asarray([
+        left[INDEX_TIP], right[INDEX_TIP],
+        right[THUMB_TIP], left[THUMB_TIP],
+    ], dtype=np.float32)
+
+    # Hull hanya dipakai untuk menolak titik runtuh/bertumpuk, bukan untuk
+    # mengubah urutan portal. Karena itu bentuk self-intersect tetap lolos.
+    hull = cv2.convexHull(quad).reshape(-1, 2)
+    if len(hull) != 4:
+        return None
+    if quad_envelope_area(quad) < min_area_scale * scale * scale:
+        return None
+    edge_lengths = [dist(quad[i], quad[(i + 1) % 4]) for i in range(4)]
+    if min(edge_lengths) < min_edge_scale * scale:
+        return None
+    return quad
+
+
+def build_tracking_quad(hands_pts):
+    """Quad toleran untuk portal yang sudah aktif.
+
+    Pose awal tetap divalidasi ketat, tetapi setelah portal terkunci kita hanya
+    menjaga geometri empat titik. Ini mencegah portal berkedip ketika satu sendi
+    telunjuk sesaat diklasifikasikan menekuk oleh MediaPipe.
+    """
+    return _quad_from_fingertips(
+        hands_pts, config.PORTAL_TRACK_MIN_AREA_SCALE, 0.20)
+
+
+def build_fingertip_quad(hands_pts, labels=None):
+    """Bangun portal dari thumb/index kedua tangan seperti foto referensi.
+
+    Return quad semantik berurutan atau None jika pose belum layak. Validasi
+    memakai ukuran telapak sehingga konsisten saat pengguna maju/mundur.
+    Handedness dipakai oleh tracker; geometri tetap diurutkan secara spasial
+    agar aman pada kamera selfie dan saat label confidence sesaat berubah.
+    """
+    if len(hands_pts) != 2:
+        return None
+
+    scales = [palm_scale(hand) for hand in hands_pts]
+    scale = sum(scales) * 0.5
+    if dist(hands_pts[0][WRIST], hands_pts[1][WRIST]) < (
+            config.PORTAL_MIN_HAND_GAP * scale):
+        return None
+
+    for hand, hand_scale in zip(hands_pts, scales):
+        fingers = fingers_extended(hand)
+        span = dist(hand[THUMB_TIP], hand[INDEX_TIP]) / hand_scale
+        # Telunjuk harus lurus; jempol diverifikasi lewat span yang lebar.
+        # Ini menerima pose L maupun telapak terbuka seperti foto TikTok.
+        if not fingers[1] or span < config.PORTAL_MIN_FINGER_SPAN:
+            return None
+    return _quad_from_fingertips(
+        hands_pts, config.PORTAL_MIN_AREA_SCALE, 0.35)
+
+
+class PortalPoseDetector:
+    """Akuisisi cepat + tracking toleran + grace waktu anti-flicker."""
+
+    def __init__(self, acquire_frames=config.PORTAL_ACQUIRE_FRAMES,
+                 lost_grace_s=config.PORTAL_LOST_GRACE_S):
+        self.acquire_frames = acquire_frames
+        self.lost_grace_s = lost_grace_s
+        self.good_frames = 0
+        self.active = False
+        self.last_quad = None
+        self.last_valid_at = None
+
+    def reset(self):
+        self.good_frames = 0
+        self.active = False
+        self.last_quad = None
+        self.last_valid_at = None
+
+    def update(self, hands_pts, labels=None, now=None, hold=False):
+        """Return quad aktif atau None.
+
+        Sebelum aktif, pose L diperiksa ketat. Setelah aktif, geometri empat
+        fingertip yang masih sehat cukup untuk memperbarui portal. Ketika hasil
+        sesaat invalid, bentuk terakhir ditahan selama `lost_grace_s`; `hold`
+        mempertahankannya selama double-pinch sengaja menutup empat sudut.
+        """
+        strict_quad = build_fingertip_quad(hands_pts, labels)
+        quad = (build_tracking_quad(hands_pts) if self.active else strict_quad)
+        if quad is not None:
+            self.last_quad = quad
+            self.last_valid_at = now
+            if self.active:
+                return self.last_quad
+            self.good_frames += 1
+            if self.good_frames >= self.acquire_frames:
+                self.active = True
+            return self.last_quad if self.active else None
+
+        self.good_frames = 0
+        if not self.active:
+            return None
+        if hold:
+            self.last_valid_at = now
+            return self.last_quad
+        if (now is not None and self.last_valid_at is not None
+                and now - self.last_valid_at <= self.lost_grace_s):
+            return self.last_quad
+
+        self.active = False
+        self.last_quad = None
+        self.last_valid_at = None
+        return self.last_quad if self.active else None
+
+
+def update_portal_alpha(alpha, visible, dt):
+    """Respons opasitas asimetris: masuk cepat, keluar lebih lembut."""
+    target = 1.0 if visible else 0.0
+    tau = config.PORTAL_FADE_IN_S if visible else config.PORTAL_FADE_OUT_S
+    return alpha + (target - alpha) * (1.0 - math.exp(-max(dt, 1e-6) / tau))
 
 
 def build_box(tip_a, tip_b, min_size=20):
@@ -42,7 +189,7 @@ def build_box(tip_a, tip_b, min_size=20):
 
 
 class QuadSmoother:
-    """Rata-rata bergerak eksponensial untuk keempat sudut kotak.
+    """One-Euro filter untuk empat sudut portal, dengan fallback EMA untuk test.
 
     Menghilangkan getaran antar-frame dari landmark mentah. `alpha` kecil =
     lebih halus tapi lebih lambat; besar = lebih gesit tapi lebih bergetar.
@@ -52,21 +199,54 @@ class QuadSmoother:
     def __init__(self, alpha=0.35):
         self.alpha = alpha
         self.smoothed = None
+        self.raw_prev = None
+        self.derivative = None
+        self.time_prev = None
 
-    def update(self, quad_pts):
+    @staticmethod
+    def _alpha(cutoff, dt):
+        tau = 1.0 / (2.0 * math.pi * cutoff)
+        return 1.0 / (1.0 + tau / dt)
+
+    def update(self, quad_pts, now=None):
         if self.smoothed is None or self.smoothed.shape != quad_pts.shape:
             self.smoothed = quad_pts.copy()
+            self.raw_prev = quad_pts.copy()
+            self.derivative = np.zeros_like(quad_pts)
+            self.time_prev = now
+            return self.smoothed
+
+        # Quad portal dari fingertip sudah memiliki identitas sudut permanen.
+        # Jangan dicocokkan ulang ke permutasi terdekat: hal itu akan membatalkan
+        # twist ketika dua sisi sengaja bersilangan.
+        if now is not None and self.time_prev is not None:
+            dt = max(1e-3, min(float(now) - float(self.time_prev), 0.1))
+            raw_derivative = (quad_pts - self.raw_prev) / dt
+            da = self._alpha(config.PORTAL_ONE_EURO_D_CUTOFF, dt)
+            self.derivative = (da * raw_derivative
+                               + (1.0 - da) * self.derivative)
+            cutoff = (config.PORTAL_ONE_EURO_MIN_CUTOFF
+                      + config.PORTAL_ONE_EURO_BETA
+                      * np.abs(self.derivative))
+            a = self._alpha(cutoff, dt)
+            self.smoothed = a * quad_pts + (1.0 - a) * self.smoothed
         else:
             self.smoothed = (self.alpha * quad_pts
                              + (1 - self.alpha) * self.smoothed)
+        self.raw_prev = quad_pts.copy()
+        if now is not None:
+            self.time_prev = now
         return self.smoothed
 
     def reset(self):
         self.smoothed = None
+        self.raw_prev = None
+        self.derivative = None
+        self.time_prev = None
 
 
 def render_portal(frame, effect_fn, quad_pts, prev_effect_fn=None, blend=1.0,
-                  alpha=1.0):
+                  alpha=1.0, effect_scale=config.PORTAL_EFFECT_SCALE):
     """Tempelkan hasil `effect_fn` di dalam wilayah kotak. Mengubah `frame`.
 
     Crop dilebarkan sebesar FEATHER_PX supaya pita mask yang dilembutkan jatuh
@@ -91,17 +271,28 @@ def render_portal(frame, effect_fn, quad_pts, prev_effect_fn=None, blend=1.0,
     # crop hanyalah view — setiap filter mengembalikan array baru, tidak
     # pernah menulisi masukannya
     crop = frame[y_min:y_max, x_min:x_max]
-    processed = effect_fn(crop)
+    if effect_scale < 1.0:
+        eh = max(1, int(round(crop.shape[0] * effect_scale)))
+        ew = max(1, int(round(crop.shape[1] * effect_scale)))
+        effect_input = cv2.resize(crop, (ew, eh), interpolation=cv2.INTER_AREA)
+    else:
+        effect_input = crop
+
+    processed = effect_fn(effect_input)
     if prev_effect_fn is not None and blend < 1.0:
-        prev = prev_effect_fn(crop)
+        prev = prev_effect_fn(effect_input)
         processed = cv2.addWeighted(processed, float(blend), prev,
                                     1.0 - float(blend), 0)
+    if processed.shape[:2] != crop.shape[:2]:
+        processed = cv2.resize(
+            processed, (crop.shape[1], crop.shape[0]),
+            interpolation=cv2.INTER_LINEAR)
 
     # mask ter-feather: isi bentuk kotak, lalu lembutkan tepinya beberapa pixel
     rh, rw = y_max - y_min, x_max - x_min
     mask = np.zeros((rh, rw), dtype=np.uint8)
     local = quad_pts.astype(np.float32) - np.array([x_min, y_min], np.float32)
-    cv2.fillConvexPoly(mask, local.astype(np.int32), 255)
+    cv2.fillPoly(mask, [local.astype(np.int32)], 255)
     mask = cv2.GaussianBlur(mask, (0, 0), sigmaX=config.FEATHER_SIGMA)
 
     if alpha < 1.0:
@@ -136,7 +327,7 @@ def draw_glow(frame, quad_pts, color, intensity):
     rw, rh = x_max - x_min, y_max - y_min
     local = quad_pts.astype(np.float32) - np.array([x_min, y_min], np.float32)
     fill = np.zeros((rh, rw), dtype=np.uint8)
-    cv2.fillConvexPoly(fill, local.astype(np.int32), 255)
+    cv2.fillPoly(fill, [local.astype(np.int32)], 255)
 
     # Bloom lebar dihitung di skala 1/4 (radius fisik sama, biaya ~1/16), lalu
     # diperbesar lagi. rim = blur(fill) - fill = cahaya lembut DI LUAR tepi;
