@@ -197,7 +197,7 @@ handportal/
 │   └── main.py            # loop kamera, mesin mode, keyboard
 ├── tests/                 # 199 test, tidak satu pun butuh webcam
 ├── assets/
-│   ├── gestur/            # foto contoh gestur: tidak disertakan (lihat Test)
+│   ├── gestur/            # thumbnail ✌️ opsional: lihat assets/gestur/README.md
 │   └── Sond/              # file suara
 ├── models/                # terisi sendiri saat pertama jalan
 └── shots/                 # hasil screenshot
