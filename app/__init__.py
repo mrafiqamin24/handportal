@@ -1,1 +1,1 @@
-"""Paket aplikasi Foto-Kita-Blurrr."""
+"""Paket aplikasi HandPortal."""

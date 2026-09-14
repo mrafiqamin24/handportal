@@ -30,7 +30,7 @@ from app.portal import (ParticleField, PortalPoseDetector, QuadSmoother,
                         render_portal, update_portal_alpha)
 from app.scenes import GestureScenes
 
-WINDOW = "Foto-Kita-Blurrr"
+WINDOW = "HandPortal"
 SOUND_FOR = {"PEACE": "blur", "KICAW": "kicaw"}
 
 MODE_GESTURE = "GESTUR"
@@ -438,7 +438,7 @@ def main():
                 os.makedirs(config.SHOTS_DIR, exist_ok=True)
                 shot_count += 1
                 path = os.path.join(config.SHOTS_DIR,
-                                    f"foto-kita-blurrr-{shot_count:03d}.png")
+                                    f"handportal-{shot_count:03d}.png")
                 cv2.imwrite(path, frame)
                 print(f"Tersimpan: {path}")
             elif key == ord("v"):

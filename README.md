@@ -1,4 +1,4 @@
-# 📸 Foto-Kita-Blurrr
+# 📸 HandPortal
 
 Mainan kamera real-time: gestur tangan memicu tulisan, animasi, dan suara —
 plus jendela portal empat-jari yang dibentuk oleh dua telunjuk dan dua jempol.
@@ -128,25 +128,51 @@ HUD menampilkan nama filter, lalu buka kembali kedua tangan sebelum mengulang.
 | `f` | Layar penuh |
 | `q` / `ESC` | Keluar |
 
-## 🚀 Menjalankan
+## 🚀 Cara pasang
 
-1. (Disarankan) buat virtual environment:
+Butuh **Python 3.9–3.12** (batas dukungan MediaPipe) dan sebuah webcam.
+
+1. Ambil kodenya:
+
+   ```bash
+   git clone https://github.com/mrafiqamin24/handportal.git
+   cd handportal
+   ```
+
+2. (Disarankan) buat virtual environment:
 
    ```powershell
+   # Windows (PowerShell)
    python -m venv venv
    venv\Scripts\Activate.ps1
    ```
 
-2. Pasang dependensi:
+   ```bash
+   # macOS / Linux
+   python3 -m venv venv
+   source venv/bin/activate
+   ```
 
-   ```powershell
+3. Pasang dependensi:
+
+   ```bash
    pip install -r requirements.txt
    ```
 
-3. Jalankan:
+4. Siapkan suara (opsional). pygame tidak andal memutar mp3, jadi aplikasi memakai
+   file WAV yang tidak ikut di repo. Buat sekali dengan [ffmpeg](https://ffmpeg.org/):
 
-   ```powershell
-   python foto_kita_blurrr.py
+   ```bash
+   ffmpeg -y -i "assets/Sond/foto kita blur.mp3" -ar 44100 -ac 2 "assets/Sond/foto kita blur.wav"
+   ffmpeg -y -i "assets/Sond/Kicaw Mania.mp3" -ar 44100 -ac 2 "assets/Sond/Kicaw Mania.wav"
+   ```
+
+   Tanpa langkah ini aplikasi tetap jalan, hanya tanpa suara.
+
+5. Jalankan:
+
+   ```bash
+   python handportal.py
    ```
 
 **Model MediaPipe terunduh otomatis** saat pertama dijalankan, lengkap dengan
@@ -156,8 +182,8 @@ mencetak perintah unduh manualnya untukmu.
 ## 📂 Struktur project
 
 ```
-Foto-Kita- Blurrr/
-├── foto_kita_blurrr.py    # entry point tipis
+handportal/
+├── handportal.py          # entry point tipis
 ├── app/
 │   ├── config.py          # semua angka yang bisa disetel
 │   ├── gestures.py        # landmark -> label gestur, pinch, smoothing (murni)
@@ -171,7 +197,7 @@ Foto-Kita- Blurrr/
 │   └── main.py            # loop kamera, mesin mode, keyboard
 ├── tests/                 # 199 test, tidak satu pun butuh webcam
 ├── assets/
-│   ├── gestur/            # contoh foto gestur
+│   ├── gestur/            # foto contoh gestur: tidak disertakan (lihat Test)
 │   └── Sond/              # file suara
 ├── models/                # terisi sendiri saat pertama jalan
 └── shots/                 # hasil screenshot
@@ -218,8 +244,9 @@ python -m pytest -q
 di-inject, audio pakai stub. Tidak ada `sleep` di seluruh suite.
 
 Termasuk di dalamnya `tests/test_reference_photos.py`, yang memakai landmark
-asli ketiga foto di `assets/gestur/` — sudah dibekukan oleh MediaPipe ke
+asli tiga foto gestur — sudah dibekukan oleh MediaPipe ke
 `tests/fixtures/reference_landmarks.json`, jadi test tetap murni dan cepat.
+Foto aslinya sengaja tidak disertakan di repo; test tidak membutuhkannya.
 Test itu adalah penjaga agar penyetelan ambang tidak pernah lagi diam-diam
 mematikan gestur yang jelas-jelas terlihat di foto.
 
@@ -228,12 +255,11 @@ mematikan gestur yang jelas-jelas terlihat di foto.
 - Butuh webcam aktif. Kalau tidak terbuka, aplikasi memberi pesan yang jelas
   beserta cara mengganti `CAM_INDEX`.
 - Suara memakai file **WAV** di `assets/Sond/` karena pygame tidak andal memutar
-  mp3. WAV dihasilkan dari mp3 asli dengan ffmpeg:
-
-  ```powershell
-  ffmpeg -y -i "assets/Sond/foto kita blur.mp3" -ar 44100 -ac 2 "assets/Sond/foto kita blur.wav"
-  ffmpeg -y -i "assets/Sond/Kicaw Mania.mp3"   -ar 44100 -ac 2 "assets/Sond/Kicaw Mania.wav"
-  ```
+  mp3; cara membuatnya ada di langkah 4 [Cara pasang](#-cara-pasang).
+- Thumbnail kecil di pojok layar saat ✌️ Peace diambil dari
+  `assets/gestur/Fotokitablurr.jpg`. Berkas itu tidak disertakan; taruh foto 16:9
+  milikmu dengan nama tersebut kalau ingin thumbnail tampil. Tanpa berkas itu
+  aplikasi tetap jalan.
 
 - Tanpa sound device — atau tanpa pygame sama sekali — program tetap jalan dengan
   efek visual saja.

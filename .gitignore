@@ -16,3 +16,10 @@ venv/
 
 # Sumber referensi (fancy-fingers) untuk keperluan implementasi
 .reference/
+
+# Foto gestur contoh berisi wajah pemilik: sengaja tidak dipublikasikan.
+# Test memakai landmark yang sudah dibekukan di tests/fixtures/.
+assets/gestur/*.jpg
+
+# Catatan kerja lokal
+skill-observations/
