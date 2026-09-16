@@ -18,4 +18,4 @@ PRD di atas adalah ide awal. Project ini kemudian digabungkan dengan
 menambah sembilan filter gambar, Mode Portal, dan HUD.
 
 Desain penggabungannya:
-`docs/superpowers/specs/2026-08-09-foto-kita-blurrr-handportal-merge-design.md`
+[`docs/desain-penggabungan.md`](docs/desain-penggabungan.md)

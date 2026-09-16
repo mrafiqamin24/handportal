@@ -76,7 +76,7 @@ Foto-Kita- Blurrr/
 │   └── test_portal.py
 ├── models/                 # di-gitignore, diunduh otomatis
 ├── assets/                 # gestur/ dan Sond/ (tidak berubah)
-├── docs/superpowers/specs/
+├── docs/
 ├── requirements.txt  LICENSE  .gitignore  README.md  PRD.md
 ```
 
